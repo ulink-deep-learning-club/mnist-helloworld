@@ -28,4 +28,4 @@ optimization:
 # Checkpointing configuration
 checkpointing:
   checkpoint_dir: checkpoints
-  save_frequency: 1
+  save_frequency: 10

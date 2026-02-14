@@ -1,6 +1,7 @@
 import argparse
 from typing import Dict, Any, Optional
 from pathlib import Path
+import yaml
 
 try:
     import yaml
@@ -10,7 +11,7 @@ except ImportError:
 
 class Config:
     """Configuration management."""
-    
+
     def __init__(self, config_dict: Dict[str, Any]):
         self._config = config_dict
         self.dataset = config_dict.get('dataset', {})
@@ -18,17 +19,17 @@ class Config:
         self.training = config_dict.get('training', {})
         self.optimization = config_dict.get('optimization', {})
         self.checkpointing = config_dict.get('checkpointing', {})
-    
+
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'Config':
         """Load configuration from YAML file."""
         if not YAML_AVAILABLE:
             raise ImportError("PyYAML is required for YAML configuration files. Install with: pip install pyyaml")
-        
+
         with open(yaml_path, 'r') as f:
             config_dict = yaml.safe_load(f)
         return cls(config_dict)
-    
+
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> 'Config':
         """Create configuration from command line arguments."""
@@ -57,11 +58,11 @@ class Config:
             }
         }
         return cls(config_dict)
-    
+
     def get(self, key: str, default: Any = None) -> Any:
         """Get configuration value."""
         return self._config.get(key, default)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return self._config.copy()
@@ -92,28 +93,28 @@ def get_default_config() -> Dict[str, Any]:
         },
         'checkpointing': {
             'checkpoint_dir': 'checkpoints',
-            'save_frequency': 1
+            'save_frequency': 10
         }
     }
 
 def create_config_parser() -> argparse.ArgumentParser:
     """Create argument parser for configuration."""
     parser = argparse.ArgumentParser(description='Train a neural network')
-    
+
     # Dataset arguments
     parser.add_argument('--dataset', type=str, default='mnist',
-                       choices=['mnist', 'cifar10'],
+                       choices=['mnist', 'cifar10', 'subset_631'],
                        help='Dataset to use')
     parser.add_argument('--data-root', type=str, default='./data',
                        help='Root directory for datasets')
-    
+
     # Model arguments
     parser.add_argument('--model', type=str, default='mynet',
-                       choices=['lenet', 'mynet'],
+                       choices=['lenet', 'mynet', 'bottleneck_vit'],
                        help='Model architecture')
     parser.add_argument('--num-classes', type=int, default=10,
                        help='Number of classes')
-    
+
     # Training arguments
     parser.add_argument('--epochs', type=int, default=20,
                        help='Number of epochs')
@@ -121,24 +122,24 @@ def create_config_parser() -> argparse.ArgumentParser:
                        help='Batch size')
     parser.add_argument('--num-workers', type=int, default=4,
                        help='Number of data loading workers')
-    
+
     # Optimization arguments
     parser.add_argument('--learning-rate', type=float, default=1e-3,
                        help='Learning rate')
     parser.add_argument('--optimizer', type=str, default='adamw',
                        choices=['adamw', 'adam', 'sgd'],
                        help='Optimizer')
-    
+
     # Checkpointing arguments
     parser.add_argument('--checkpoint-dir', type=str, default='checkpoints',
                        help='Directory for checkpoints')
     parser.add_argument('--save-frequency', type=int, default=1,
                        help='Save frequency in epochs')
-    
+
     # Configuration file
     parser.add_argument('--config', type=str,
                        help='Path to YAML configuration file')
-    
+
     return parser
 
 def load_config(config_path: Optional[str] = None, args: Optional[argparse.Namespace] = None) -> Config:

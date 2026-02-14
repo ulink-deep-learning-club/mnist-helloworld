@@ -1,0 +1,29 @@
+[project]
+name = "mnist-helloworld"
+version = "0.1.0"
+description = "A refactored, modular version of the original MNIST classifier that supports multiple datasets and model architectures"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "torch==2.6.0",
+    "torchvision==0.21.0",
+    "matplotlib>=3.10.8",
+    "opencv-python>=4.13.0.92",
+    "pillow>=12.0.0",
+    "pyyaml>=6.0.3",
+    "tqdm>=4.66.5",
+    "torchinfo>=1.8.0",
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu124", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true

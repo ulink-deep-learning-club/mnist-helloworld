@@ -1,5 +1,6 @@
 .venv/
 data/
+runs/
 checkpoints/
 *.pth
 *.pt
