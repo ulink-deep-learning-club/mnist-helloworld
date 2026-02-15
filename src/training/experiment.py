@@ -6,10 +6,13 @@ from typing import Optional
 class ExperimentManager:
     """Manage experiment directories in YOLO style (runs/exp1, runs/exp2, ...)."""
 
-    def __init__(self, base_dir: str = "runs"):
+    def __init__(self, base_dir: str = "runs", resume_exp: Optional[str] = None):
         self.base_dir = base_dir
         os.makedirs(base_dir, exist_ok=True)
-        self.experiment_dir = self._create_experiment_dir()
+        if resume_exp:
+            self.experiment_dir = self._load_experiment_dir(resume_exp)
+        else:
+            self.experiment_dir = self._create_experiment_dir()
 
     def _create_experiment_dir(self) -> str:
         """Create a new experiment directory with auto-incrementing name."""
@@ -33,6 +36,20 @@ class ExperimentManager:
 
         # Create subdirectories
         os.makedirs(os.path.join(exp_dir, "checkpoints"), exist_ok=True)
+
+        return exp_dir
+
+    def _load_experiment_dir(self, exp_name: str) -> str:
+        """Load an existing experiment directory."""
+        exp_dir = os.path.join(self.base_dir, exp_name)
+        if not os.path.exists(exp_dir):
+            raise FileNotFoundError(f"Experiment directory not found: {exp_dir}")
+        if not os.path.isdir(exp_dir):
+            raise NotADirectoryError(f"Not a directory: {exp_dir}")
+
+        # Ensure checkpoints directory exists
+        checkpoints_dir = os.path.join(exp_dir, "checkpoints")
+        os.makedirs(checkpoints_dir, exist_ok=True)
 
         return exp_dir
 

@@ -4,6 +4,7 @@ Modular Training Script for Neural Networks
 Supports multiple datasets and model architectures
 """
 
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -67,12 +68,26 @@ def main():
     )
 
     # Create experiment manager (YOLO-style runs/expX)
-    experiment_manager = ExperimentManager(base_dir="runs")
+    experiment_manager = ExperimentManager(base_dir="runs", resume_exp=args.resume)
     logger.info(experiment_manager.get_experiment_info())
 
-    # Save config to experiment directory
-    with open(experiment_manager.config_file, "w") as f:
-        yaml.dump(config.to_dict(), f, default_flow_style=False)
+    # Check if resuming
+    resume_checkpoint = None
+    start_epoch = 0
+    if args.resume:
+        checkpoint_path = os.path.join(
+            experiment_manager.checkpoints_dir, "latest_checkpoint.pt"
+        )
+        if os.path.exists(checkpoint_path):
+            logger.info(f"Resuming from checkpoint: {checkpoint_path}")
+            resume_checkpoint = checkpoint_path
+        else:
+            logger.warning(
+                f"No checkpoint found at {checkpoint_path}, starting from scratch"
+            )
+
+    # Save config to experiment directory (if not resuming)
+    # Note: Config is saved after dataset creation to get actual values
 
     # Create dataset
     logger.info(f"Creating dataset: {config.dataset['name']}")
@@ -89,13 +104,52 @@ def main():
         shuffle_train=config.training.get("shuffle_train", True),
     )
 
+    # Save config with actual dataset values (if not resuming)
+    if not args.resume:
+        config_dict = config.to_dict()
+        config_dict["dataset"]["name"] = config.dataset["name"]
+        config_dict["model"]["num_classes"] = dataset.num_classes
+        config_dict["model"]["input_channels"] = dataset.input_channels
+        config_dict["model"]["input_size"] = dataset.input_size
+        with open(experiment_manager.config_file, "w") as f:
+            yaml.dump(config_dict, f, default_flow_style=False)
+
+    # Create checkpoint manager first (needed for resume)
+    checkpoint_manager = CheckpointManager(
+        checkpoints_dir=experiment_manager.checkpoints_dir
+    )
+
+    # Load checkpoint config if resuming
+    model_config = None
+    if resume_checkpoint:
+        checkpoint_data = torch.load(resume_checkpoint, map_location="cpu")
+        model_config = checkpoint_data.get("model_config", {})
+        logger.info(f"Loaded model config from checkpoint: {model_config}")
+
     # Create model
     logger.info(f"Creating model: {config.model['name']}")
+
+    # Use config from checkpoint if available, otherwise use current settings
+    # Note: dataset properties are source of truth for input data characteristics
+    if model_config and "num_classes" in model_config:
+        # Resume with same architecture as checkpoint
+        num_classes = model_config.get("num_classes", dataset.num_classes)
+        # Always use dataset's actual input channels and size (source of truth)
+        input_channels = dataset.input_channels
+        input_size = dataset.input_size
+        logger.info(
+            f"Using model config from checkpoint: classes={num_classes}, channels={input_channels}, size={input_size}"
+        )
+    else:
+        num_classes = dataset.num_classes
+        input_channels = dataset.input_channels
+        input_size = dataset.input_size
+
     model = ModelRegistry.create(
         config.model["name"],
-        num_classes=dataset.num_classes,
-        input_channels=dataset.input_channels,
-        input_size=dataset.input_size,
+        num_classes=num_classes,
+        input_channels=input_channels,
+        input_size=input_size,
     ).to(device)
 
     # Print model info
@@ -111,12 +165,7 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = create_optimizer(model, config)
 
-    # Create checkpoint manager
-    checkpoint_manager = CheckpointManager(
-        checkpoints_dir=experiment_manager.checkpoints_dir
-    )
-
-    # Create trainer
+    # Create trainer first
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -128,11 +177,38 @@ def main():
         checkpoint_manager=checkpoint_manager,
     )
 
+    # Load history and get start epoch if resuming
+    if resume_checkpoint:
+        start_epoch = trainer.load_history_from_log()
+        logger.info(f"Loaded history from {start_epoch} epochs")
+
+        # Load checkpoint weights (non-strict to allow partial loading like YOLO)
+        try:
+            checkpoint_info = checkpoint_manager.load_checkpoint(
+                resume_checkpoint, model, optimizer, strict=False
+            )
+            # Use epoch from log file as it's more reliable
+            checkpoint_manager.best_accuracy = checkpoint_info["accuracy"]
+            logger.info(
+                f"Resumed from epoch {start_epoch}, best accuracy: {checkpoint_info['accuracy']:.2f}%"
+            )
+        except RuntimeError as e:
+            logger.error(f"Failed to load checkpoint: {e}")
+            logger.error(
+                "The checkpoint may be incompatible with the current model architecture."
+            )
+            logger.error(
+                "Please check if the model code has changed since the checkpoint was created."
+            )
+            raise
+
     # Start training
     logger.info(f"Starting training for {config.training['epochs']} epochs")
 
     try:
-        results = trainer.train(epochs=config.training["epochs"])
+        results = trainer.train(
+            epochs=config.training["epochs"], start_epoch=start_epoch
+        )
 
         # Print summary
         logger.info(f"\nTraining completed!")

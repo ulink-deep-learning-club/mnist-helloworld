@@ -1,4 +1,6 @@
+import os
 import torchvision
+from torch.utils.data import random_split
 import torchvision.transforms as transforms
 from .base import BaseDataset
 
@@ -29,15 +31,17 @@ class Subset631Dataset(BaseDataset):
 
     def load_data(self):
         """Load Subset 631 dataset."""
-        import os
 
         data_path = os.path.join(self.root, "subset_631")
 
-        self._train_dataset = torchvision.datasets.ImageFolder(
+        full_dataset = torchvision.datasets.ImageFolder(
             root=data_path, transform=self._train_transform
         )
-        self._test_dataset = torchvision.datasets.ImageFolder(
-            root=data_path, transform=self._test_transform
+
+        train_size = int(0.8 * len(full_dataset))
+        test_size = len(full_dataset) - train_size
+        self._train_dataset, self._test_dataset = random_split(
+            full_dataset, [train_size, test_size]
         )
 
     @property

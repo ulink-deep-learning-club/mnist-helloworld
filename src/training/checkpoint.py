@@ -31,6 +31,7 @@ class CheckpointManager:
             "optimizer_state_dict": optimizer.state_dict(),
             "loss": loss,
             "accuracy": accuracy,
+            "model_config": getattr(model, "get_model_info", lambda: {})(),
         }
 
         if additional_info:
@@ -43,16 +44,64 @@ class CheckpointManager:
         filepath: str,
         model: nn.Module,
         optimizer: Optional[optim.Optimizer] = None,
+        strict: bool = True,
     ) -> Dict[str, Any]:
-        """Load model checkpoint."""
+        """Load model checkpoint.
+
+        Args:
+            filepath: Path to checkpoint file
+            model: Model to load weights into
+            optimizer: Optional optimizer to load state into
+            strict: If False, loads compatible layers and skips incompatible ones (YOLO-style)
+        """
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Checkpoint not found: {filepath}")
 
         checkpoint = torch.load(filepath, map_location="cpu")
-        model.load_state_dict(checkpoint["model_state_dict"])
+        state_dict = checkpoint["model_state_dict"]
+        model_state = model.state_dict()
+
+        if strict:
+            model.load_state_dict(state_dict, strict=True)
+        else:
+            # YOLO-style partial loading: only load compatible layers
+            compatible_layers = {}
+            incompatible_keys = []
+
+            for k, v in state_dict.items():
+                if k in model_state:
+                    if v.shape == model_state[k].shape:
+                        compatible_layers[k] = v
+                    else:
+                        incompatible_keys.append((k, v.shape, model_state[k].shape))
+                else:
+                    incompatible_keys.append((k, v.shape, None))
+
+            # Load compatible layers
+            model.load_state_dict(compatible_layers, strict=False)
+
+            # Report results
+            total_keys = len(state_dict)
+            loaded_keys = len(compatible_layers)
+            print(f"Checkpoint loaded: {loaded_keys}/{total_keys} layers matched")
+            if incompatible_keys:
+                print(f"Skipped {len(incompatible_keys)} incompatible layers:")
+                for key, ckpt_shape, model_shape in incompatible_keys[:10]:
+                    if model_shape:
+                        print(
+                            f"  {key}: checkpoint {ckpt_shape} vs model {model_shape}"
+                        )
+                    else:
+                        print(f"  {key}: not in model (checkpoint shape: {ckpt_shape})")
+                if len(incompatible_keys) > 10:
+                    print(f"  ... and {len(incompatible_keys) - 10} more")
 
         if optimizer and "optimizer_state_dict" in checkpoint:
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            try:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            except ValueError as e:
+                print(f"Warning: Could not load optimizer state: {e}")
+                print("Optimizer will be initialized from scratch")
 
         return {
             "epoch": checkpoint.get("epoch", 0),

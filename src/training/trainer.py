@@ -51,16 +51,47 @@ class Trainer:
             "val_speed": [],
         }
 
-        # Initialize log file
-        self._init_log_file()
+        # Initialize log file only if it doesn't exist
+        if not os.path.exists(self.experiment_manager.log_file):
+            self._init_log_file()
 
     def _init_log_file(self):
         """Initialize training log file with headers."""
         log_path = self.experiment_manager.log_file
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, "w") as f:
             f.write(
                 "epoch, train_loss, train_acc, val_loss, val_acc, lr, epoch_time(s), train_it/s, val_it/s\n"
             )
+
+    def load_history_from_log(self) -> int:
+        """Load training history from existing log file. Returns last epoch number."""
+        log_path = self.experiment_manager.log_file
+        if not os.path.exists(log_path):
+            return 0
+
+        last_epoch = 0
+        with open(log_path, "r") as f:
+            lines = f.readlines()
+            # Skip header
+            for line in lines[1:]:
+                parts = line.strip().split(",")
+                if len(parts) >= 9:
+                    try:
+                        self.history["train_loss"].append(float(parts[1].strip()))
+                        self.history["train_accuracy"].append(float(parts[2].strip()))
+                        self.history["val_loss"].append(float(parts[3].strip()))
+                        self.history["val_accuracy"].append(float(parts[4].strip()))
+                        self.history["learning_rate"].append(float(parts[5].strip()))
+                        self.history["epoch_time"].append(
+                            float(parts[6].strip().replace("s", ""))
+                        )
+                        self.history["train_speed"].append(float(parts[7].strip()))
+                        self.history["val_speed"].append(float(parts[8].strip()))
+                        last_epoch = int(parts[0].strip())
+                    except (ValueError, IndexError):
+                        continue
+        return last_epoch
 
     def _log_epoch(
         self,
