@@ -1,6 +1,11 @@
 import torch
 import torch.nn as nn
-from .base import BaseModel
+import torch.nn.functional as F
+
+try:
+    from .base import BaseModel
+except ImportError:
+    from base import BaseModel
 
 
 class PatchEmbed(nn.Module):
@@ -144,30 +149,43 @@ class BottleneckViT(BaseModel):
 
         self.embed_dim = embed_dim
 
-        # Stage 1: CNN Feature Extractor (Convolutional Bottleneck)
-        # Single MaxPool to preserve spatial resolution for fine-grained character details
-        self.conv_extractor = nn.Sequential(
-            # Layer 1: 7x7 kernel, stride=2 for downsampling
+        # Stage 1: FPN-style Pyramid Feature Extractor
+        # Bottom-up pathway
+        self.layer1 = nn.Sequential(
             nn.Conv2d(
                 input_channels, 64, kernel_size=7, stride=2, padding=3
             ),  # 64x64 -> 32x32
             nn.BatchNorm2d(64),
             nn.SiLU(inplace=True),
-            # Layer 2: 3x3 kernel, maintain resolution
-            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+        )
+        self.layer2 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # 32x32 -> 16x16
             nn.BatchNorm2d(128),
             nn.SiLU(inplace=True),
-            # Layer 3: 3x3 kernel, maintain resolution
-            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+        )
+        self.layer3 = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),  # 16x16 -> 8x8
             nn.BatchNorm2d(256),
             nn.SiLU(inplace=True),
         )
 
+        # Lateral connections (project to same channel dim for addition)
+        self.lateral3 = nn.Conv2d(256, 256, kernel_size=1)
+        self.lateral2 = nn.Conv2d(128, 256, kernel_size=1)
+        self.lateral1 = nn.Conv2d(64, 256, kernel_size=1)
+
+        # Output conv
+        self.fpn_output = nn.Sequential(
+            nn.Conv2d(256, embed_dim, kernel_size=1),
+            nn.BatchNorm2d(embed_dim),
+            nn.SiLU(inplace=True),
+        )
+
         # Stage 2: SE Block + Conv Bottleneck
-        self.se_block = SEBlock(256, reduction=16)
+        self.se_block = SEBlock(embed_dim, reduction=16)
         self.conv_bottleneck = nn.Sequential(
             nn.Conv2d(
-                256, embed_dim, kernel_size=3, stride=2, padding=1
+                embed_dim, embed_dim, kernel_size=3, stride=2, padding=1
             ),  # 32x32 -> 16x16 (256 patches for ViT)
             nn.BatchNorm2d(embed_dim),
             nn.SiLU(inplace=True),
@@ -233,8 +251,23 @@ class BottleneckViT(BaseModel):
     def _forward_impl(self, x):
         B = x.shape[0]
 
-        # Stage 1: CNN Feature Extraction
-        x = self.conv_extractor(x)
+        # Stage 1: FPN Feature Extraction
+        # Bottom-up pathway
+        c1 = self.layer1(x)  # 32x32, 64ch
+        c2 = self.layer2(c1)  # 16x16, 128ch
+        c3 = self.layer3(c2)  # 8x8, 256ch
+
+        # Top-down pathway with lateral connections
+        p3 = self.lateral3(c3)  # 8x8, 256ch
+        p2 = self.lateral2(c2) + F.interpolate(
+            p3, size=c2.shape[2:], mode="bilinear", align_corners=False
+        )  # 16x16, 256ch
+        p1 = self.lateral1(c1) + F.interpolate(
+            p2, size=c1.shape[2:], mode="bilinear", align_corners=False
+        )  # 32x32, 256ch
+
+        # Output projection
+        x = self.fpn_output(p1)  # 32x32, embed_dim
 
         # Stage 2: SE Block + Conv Bottleneck
         x = self.se_block(x)
@@ -253,3 +286,10 @@ class BottleneckViT(BaseModel):
 
         # Stage 5: Classification
         return self.head(x[:, 0])
+
+
+if __name__ == "__main__":
+    from torchinfo import summary
+
+    model = BottleneckViT()
+    summary(model, input_size=(1, 3, 64, 64))
