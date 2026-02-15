@@ -107,7 +107,7 @@ class SEBlock(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
             nn.Linear(channels, channels // reduction, bias=False),
-            nn.ReLU(inplace=True),
+            nn.SiLU(inplace=True),
             nn.Linear(channels // reduction, channels, bias=False),
             nn.Sigmoid(),
         )
@@ -145,19 +145,19 @@ class BottleneckViT(BaseModel):
         self.embed_dim = embed_dim
 
         # Stage 1: CNN Feature Extractor (Convolutional Bottleneck)
-        # Larger kernel (7x7) for first layer, less stride for better feature preservation
+        # Single MaxPool to preserve spatial resolution for fine-grained character details
         self.conv_extractor = nn.Sequential(
-            # Layer 1: 7x7 kernel, stride=1 (larger receptive field, no downsampling)
-            nn.Conv2d(input_channels, 64, kernel_size=7, stride=1, padding=3),
+            # Layer 1: 7x7 kernel, stride=2 for downsampling
+            nn.Conv2d(
+                input_channels, 64, kernel_size=7, stride=2, padding=3
+            ),  # 64x64 -> 32x32
             nn.BatchNorm2d(64),
             nn.SiLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 64x64 -> 32x32
-            # Layer 2: 3x3 kernel, stride=1 (less aggressive downsampling)
+            # Layer 2: 3x3 kernel, maintain resolution
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
             nn.SiLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 32x32 -> 16x16
-            # Layer 3: 3x3 kernel, stride=1
+            # Layer 3: 3x3 kernel, maintain resolution
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(256),
             nn.SiLU(inplace=True),
@@ -168,14 +168,16 @@ class BottleneckViT(BaseModel):
         self.conv_bottleneck = nn.Sequential(
             nn.Conv2d(
                 256, embed_dim, kernel_size=3, stride=2, padding=1
-            ),  # 16x16 -> 8x8
+            ),  # 32x32 -> 16x16 (256 patches for ViT)
             nn.BatchNorm2d(embed_dim),
             nn.SiLU(inplace=True),
-            nn.Dropout2d(drop_rate),
         )
 
         # Stage 3: Vision Transformer
-        num_patches = (img_size // patch_size) ** 2
+        # After Stage 1 (stride=2): 64x64 -> 32x32
+        # After Stage 2 (stride=2): 32x32 -> 16x16
+        # Total patches: 16x16 = 256 (4x more than before for better detail preservation)
+        num_patches = 256
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
@@ -197,7 +199,7 @@ class BottleneckViT(BaseModel):
         # Stage 5: Classification Head (2x FC with more capacity)
         self.head = nn.Sequential(
             nn.Linear(embed_dim, embed_dim),
-            nn.ReLU(inplace=True),
+            nn.SiLU(inplace=True),
             nn.Dropout(drop_rate),
             nn.Linear(embed_dim, num_classes),
         )
@@ -218,7 +220,7 @@ class BottleneckViT(BaseModel):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
-            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            nn.init.kaiming_normal_(m.weight, mode="fan_out")
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
