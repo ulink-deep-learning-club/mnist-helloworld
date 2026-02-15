@@ -177,25 +177,41 @@ class VisionTransformer(nn.Module):
 class PyramidFeatureExtractor(nn.Module):
     """Concatenation-based Pyramid Feature Extractor for better SE reweighting."""
 
-    def __init__(self, input_channels=3):
+    def __init__(self, input_channels=3, lateral_channels_list=[64,128,256], out_dim=256):
         super().__init__()
-        # Bottom-up pathway
         self.layer1 = nn.Sequential(
-            nn.Conv2d(
-                input_channels, 64, kernel_size=7, stride=2, padding=3
-            ),  # 64x64 -> 32x32
-            nn.BatchNorm2d(64),
+            nn.Conv2d(input_channels, lateral_channels_list[0], kernel_size=3, stride=2, padding=1),  # 64x64 -> 32x32
+            nn.BatchNorm2d(lateral_channels_list[0]),
             nn.SiLU(inplace=True),
         )
         self.layer2 = nn.Sequential(
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),  # 32x32 -> 16x16
-            nn.BatchNorm2d(128),
+            nn.Conv2d(lateral_channels_list[0], lateral_channels_list[1], kernel_size=3, stride=2, padding=1),  # 32x32 -> 16x16
+            nn.BatchNorm2d(lateral_channels_list[1]),
             nn.SiLU(inplace=True),
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),  # 16x16 -> 8x8
-            nn.BatchNorm2d(256),
+            nn.Conv2d(lateral_channels_list[1], lateral_channels_list[2], kernel_size=3, stride=2, padding=1),  # 16x16 -> 8x8
+            nn.BatchNorm2d(lateral_channels_list[2]),
             nn.SiLU(inplace=True),
+        )
+
+        self.lateral1 = nn.Conv2d(lateral_channels_list[0], out_dim, 3, stride=2, padding=1)
+        self.lateral2 = nn.Conv2d(lateral_channels_list[1], out_dim, 1)
+        self.lateral3 = nn.Sequential(
+            nn.Conv2d(lateral_channels_list[2], out_dim, 1),
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+        )
+
+        # Scale-specific SE (optional shared weights)
+        self.se1 = SEBlock(out_dim)
+        self.se2 = SEBlock(out_dim)
+        self.se3 = SEBlock(out_dim)
+
+        # Fusion conv: reduce channels after concatenation
+        self.fusion_conv = nn.Sequential(
+            nn.Conv2d(out_dim*3, out_dim, 1),
+            nn.BatchNorm2d(out_dim),
+            nn.SiLU(inplace=True)
         )
 
     def forward(self, x):
@@ -204,20 +220,23 @@ class PyramidFeatureExtractor(nn.Module):
         c2 = self.layer2(c1)  # 16x16, 128ch
         c3 = self.layer3(c2)  # 8x8, 256ch
 
-        # Upsample all to 32x32 and concatenate
-        c2_up = F.interpolate(
-            c2, size=c1.shape[2:], mode="bilinear", align_corners=False
-        )
-        c3_up = F.interpolate(
-            c3, size=c1.shape[2:], mode="bilinear", align_corners=False
-        )
+        # 1. Unify channels
+        p1 = self.lateral1(c1)   # 32x32, out_dim
+        p2 = self.lateral2(c2)   # 16x16, out_dim
+        p3 = self.lateral3(c3)   # 8x8, out_dim
 
-        # Concatenate: 64 + 128 + 256 = 448 channels
-        fused = torch.cat([c1, c2_up, c3_up], dim=1)  # 32x32, 448ch
-        return fused
+        # 2. Apply SE independently
+        p1 = self.se1(p1)
+        p2 = self.se2(p2)
+        p3 = self.se3(p3)
+
+        # 4. Concatenate and fuse
+        fused = torch.cat([p1, p2, p3], dim=1)  # (B, out_dim*3, 16, 16)
+        out = self.fusion_conv(fused)           # (B, out_dim, 16, 16)
+        return out
 
 
-class BottleneckViTFPN(BaseModel):
+class FeaturePyramidViT(BaseModel):
     """Vision Transformer with Bottleneck for Chinese Character Recognition.
 
     Structure: Conv feature extraction -> Conv bottleneck -> ViT blocks -> 2x FC classification
@@ -226,10 +245,10 @@ class BottleneckViTFPN(BaseModel):
     def __init__(
         self,
         img_size=64,
-        patch_size=8,
+        fpn_out_channels=128,
+        embed_dim=256,
         input_channels=3,
         num_classes=631,
-        embed_dim=256,
         depth=8,
         num_heads=8,
         mlp_ratio=4.0,
@@ -248,32 +267,27 @@ class BottleneckViTFPN(BaseModel):
             nn.SiLU(inplace=True),
         )
 
-        # Stage 1: Pyramid Feature Extractor (outputs 448 channels)
-        self.pyramid_extractor = PyramidFeatureExtractor(input_channels=1)
-
-        # Stage 2: SE Block on concatenated features + Channel Reduction
-        # 448 channels: SE can learn to reweight each scale independently
-        self.se_block = SEBlock(448, reduction=32)  # Larger reduction for more channels
-        self.channel_reduction = nn.Sequential(
-            nn.Conv2d(448, embed_dim, kernel_size=1),  # 448 -> embed_dim
-            nn.BatchNorm2d(embed_dim),
-            nn.SiLU(inplace=True),
+        # Stage 1: Pyramid Feature Extractor & Channel Reduction
+        self.pyramid_extractor = PyramidFeatureExtractor(
+            input_channels=1,
+            lateral_channels_list=[64, 128, 256],
+            out_dim=fpn_out_channels,
         )
+
+        # Stage 2: 256 patches for ViT
         self.conv_bottleneck = nn.Sequential(
             nn.Conv2d(
-                embed_dim, embed_dim, kernel_size=3, stride=2, padding=1
-            ),  # 32x32 -> 16x16 (256 patches for ViT)
-            nn.BatchNorm2d(embed_dim),
+                fpn_out_channels, self.embed_dim, kernel_size=3, padding=1
+            ),
+            nn.BatchNorm2d(self.embed_dim),
             nn.SiLU(inplace=True),
         )
 
         # Stage 3: Vision Transformer
-        # After Stage 1 (stride=2): 64x64 -> 32x32
-        # After Stage 2 (stride=2): 32x32 -> 16x16
         # Total patches: 16x16 = 256 (4x more than before for better detail preservation)
-        num_patches = 256
+        num_patches = (img_size // 4) ** 2
         self.vit = VisionTransformer(
-            embed_dim=embed_dim,
+            embed_dim=self.embed_dim,
             num_patches=num_patches,
             depth=depth,
             num_heads=num_heads,
@@ -283,10 +297,10 @@ class BottleneckViTFPN(BaseModel):
 
         # Stage 5: Classification Head (2x FC with more capacity)
         self.head = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
+            nn.Linear(self.embed_dim, self.embed_dim // 2),
             nn.SiLU(inplace=True),
             nn.Dropout(drop_rate),
-            nn.Linear(embed_dim, num_classes),
+            nn.Linear(self.embed_dim // 2, num_classes),
         )
 
         self._init_weights()
@@ -303,7 +317,7 @@ class BottleneckViTFPN(BaseModel):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
-            nn.init.kaiming_normal_(m.weight, mode="fan_out")
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity='relu')
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
@@ -317,11 +331,9 @@ class BottleneckViTFPN(BaseModel):
             x = self.image_mono_channel(x)
 
         # Stage 1: FPN Feature Extraction
-        x = self.pyramid_extractor(x)  # 32x32, embed_dim
+        x = self.pyramid_extractor(x)
 
-        # Stage 2: SE Block + Channel Reduction + Conv Bottleneck
-        x = self.se_block(x)  # SE reweights all 448 channels
-        x = self.channel_reduction(x)  # 448 -> embed_dim
+        # Stage 2: Conv Bottleneck
         x = self.conv_bottleneck(x)
 
         # Stage 3: Reshape to patches for ViT (B, C, H, W) -> (B, H*W, C)
@@ -337,5 +349,5 @@ class BottleneckViTFPN(BaseModel):
 if __name__ == "__main__":
     from torchinfo import summary
 
-    model = BottleneckViTFPN()
+    model = FeaturePyramidViT()
     summary(model, input_size=(1, 3, 64, 64))

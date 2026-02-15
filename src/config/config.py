@@ -106,7 +106,7 @@ def create_config_parser() -> argparse.ArgumentParser:
         "--model",
         type=str,
         default="mynet",
-        choices=["lenet", "mynet", "bottleneck_vit", "bottleneck_vit_fpn"],
+        choices=["lenet", "mynet", "bottleneck_vit", "fpn_vit"],
         help="Model architecture",
     )
     parser.add_argument("--num-classes", type=int, default=10, help="Number of classes")
