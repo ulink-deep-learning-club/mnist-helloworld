@@ -99,10 +99,30 @@ class Block(nn.Module):
         return x
 
 
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation block."""
+
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
 class BottleneckViT(BaseModel):
     """Vision Transformer with Bottleneck for Chinese Character Recognition.
 
-    Structure: Conv feature extraction -> FC bottleneck -> ViT blocks -> 2x FC classification
+    Structure: Conv feature extraction -> Conv bottleneck -> ViT blocks -> 2x FC classification
     """
 
     def __init__(
@@ -111,12 +131,11 @@ class BottleneckViT(BaseModel):
         patch_size=8,
         input_channels=3,
         num_classes=631,
-        embed_dim=256,
-        depth=6,
-        num_heads=8,
+        embed_dim=384,
+        depth=8,
+        num_heads=12,
         mlp_ratio=4.0,
-        drop_rate=0.3,
-        bottleneck_dim=128,
+        drop_rate=0.2,
         **kwargs,
     ):
         super().__init__(
@@ -124,49 +143,38 @@ class BottleneckViT(BaseModel):
         )
 
         self.embed_dim = embed_dim
-        self.bottleneck_dim = bottleneck_dim
 
         # Stage 1: CNN Feature Extractor (Convolutional Bottleneck)
         # Larger kernel (7x7) for first layer, less stride for better feature preservation
         self.conv_extractor = nn.Sequential(
             # Layer 1: 7x7 kernel, stride=1 (larger receptive field, no downsampling)
-            nn.Conv2d(input_channels, 32, kernel_size=7, stride=1, padding=3),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
+            nn.Conv2d(input_channels, 64, kernel_size=7, stride=1, padding=3),
+            nn.BatchNorm2d(64),
+            nn.SiLU(inplace=True),
             nn.MaxPool2d(kernel_size=2, stride=2),  # 64x64 -> 32x32
             # Layer 2: 3x3 kernel, stride=1 (less aggressive downsampling)
-            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2),  # 32x32 -> 16x16
-            # Layer 3: 3x3 kernel, stride=1
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-        )
-
-        # Calculate flattened size after conv
-        conv_output_size = (img_size // 4) * (img_size // 4) * 128
-
-        # Stage 2: FC Bottleneck (dimension reduction)
-        self.fc_bottleneck = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(conv_output_size, bottleneck_dim),
-            nn.BatchNorm1d(bottleneck_dim),
             nn.SiLU(inplace=True),
-            nn.Dropout(drop_rate),
-            nn.Linear(bottleneck_dim, bottleneck_dim),
+            nn.MaxPool2d(kernel_size=2, stride=2),  # 32x32 -> 16x16
+            # Layer 3: 3x3 kernel, stride=1
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(256),
             nn.SiLU(inplace=True),
-            nn.Dropout(drop_rate),
         )
 
-        # Stage 3: Project back to image-like structure for ViT
-        self.bottleneck_to_patches = nn.Sequential(
-            nn.Linear(bottleneck_dim, (img_size // patch_size) ** 2 * embed_dim),
-            nn.Unflatten(1, ((img_size // patch_size) ** 2, embed_dim)),
+        # Stage 2: SE Block + Conv Bottleneck
+        self.se_block = SEBlock(256, reduction=16)
+        self.conv_bottleneck = nn.Sequential(
+            nn.Conv2d(
+                256, embed_dim, kernel_size=3, stride=2, padding=1
+            ),  # 16x16 -> 8x8
+            nn.BatchNorm2d(embed_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout2d(drop_rate),
         )
 
-        # Stage 4: Vision Transformer
+        # Stage 3: Vision Transformer
         num_patches = (img_size // patch_size) ** 2
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
@@ -186,12 +194,12 @@ class BottleneckViT(BaseModel):
 
         self.norm = nn.LayerNorm(embed_dim)
 
-        # Stage 5: Classification Head (2x FC)
+        # Stage 5: Classification Head (2x FC with more capacity)
         self.head = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim // 2),
+            nn.Linear(embed_dim, embed_dim),
             nn.ReLU(inplace=True),
             nn.Dropout(drop_rate),
-            nn.Linear(embed_dim // 2, num_classes),
+            nn.Linear(embed_dim, num_classes),
         )
 
         self._init_weights()
@@ -226,11 +234,12 @@ class BottleneckViT(BaseModel):
         # Stage 1: CNN Feature Extraction
         x = self.conv_extractor(x)
 
-        # Stage 2: FC Bottleneck
-        x = self.fc_bottleneck(x)
+        # Stage 2: SE Block + Conv Bottleneck
+        x = self.se_block(x)
+        x = self.conv_bottleneck(x)
 
-        # Stage 3: Convert back to patches for ViT
-        x = self.bottleneck_to_patches(x)
+        # Stage 3: Reshape to patches for ViT (B, C, H, W) -> (B, H*W, C)
+        x = x.flatten(2).transpose(1, 2)
 
         # Stage 4: ViT Processing
         cls_tokens = self.cls_token.expand(B, -1, -1)
