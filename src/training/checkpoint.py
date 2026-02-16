@@ -8,8 +8,9 @@ from typing import Optional, Dict, Any
 class CheckpointManager:
     """Manage model checkpoints within an experiment."""
 
-    def __init__(self, checkpoints_dir: str):
+    def __init__(self, checkpoints_dir: str, save_frequency: int = 10):
         self.checkpoints_dir = checkpoints_dir
+        self.save_frequency = save_frequency
         os.makedirs(checkpoints_dir, exist_ok=True)
         self.best_accuracy = 0.0
         self.best_loss = float("inf")

@@ -352,8 +352,8 @@ class Trainer:
                     best_accuracy = val_metrics["accuracy"]
                     print(f"New best model saved with accuracy: {best_accuracy:.2f}%")
 
-                # Save epoch checkpoint periodically (every 10 epochs)
-                if (epoch + 1) % 10 == 0:
+                # Save epoch checkpoint periodically
+                if (epoch + 1) % self.checkpoint_manager.save_frequency == 0:
                     self.checkpoint_manager.save_epoch_checkpoint(
                         self.model,
                         self.optimizer,

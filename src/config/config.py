@@ -152,6 +152,19 @@ def create_config_parser() -> argparse.ArgumentParser:
         help="Resume training from a specific experiment (e.g., exp1, exp2)",
     )
 
+    # Layer freezing
+    parser.add_argument(
+        "--freeze",
+        type=str,
+        nargs="+",
+        help=(
+            "Freeze specific layers. Supports: "
+            "(1) Layer IDs: --freeze 2-1 2-2; "
+            "(2) ID ranges: --freeze 2-1:2-5; "
+            "(3) Name patterns: --freeze features classifier"
+        ),
+    )
+
     return parser
 
 

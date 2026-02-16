@@ -246,7 +246,8 @@ class FeaturePyramidViT(BaseModel):
         self,
         img_size=64,
         fpn_out_channels=128,
-        embed_dim=256,
+        embed_dim=192,
+        patch_size=8,
         input_channels=3,
         num_classes=631,
         depth=8,
@@ -275,9 +276,11 @@ class FeaturePyramidViT(BaseModel):
         )
 
         # Stage 2: 256 patches for ViT
+        stride = (img_size // 4) // patch_size
+        num_patches = ((img_size // 4) // stride) ** 2
         self.conv_bottleneck = nn.Sequential(
             nn.Conv2d(
-                fpn_out_channels, self.embed_dim, kernel_size=3, padding=1
+                fpn_out_channels, self.embed_dim, kernel_size=3, padding=1, stride=stride
             ),
             nn.BatchNorm2d(self.embed_dim),
             nn.SiLU(inplace=True),
@@ -285,7 +288,6 @@ class FeaturePyramidViT(BaseModel):
 
         # Stage 3: Vision Transformer
         # Total patches: 16x16 = 256 (4x more than before for better detail preservation)
-        num_patches = (img_size // 4) ** 2
         self.vit = VisionTransformer(
             embed_dim=self.embed_dim,
             num_patches=num_patches,
