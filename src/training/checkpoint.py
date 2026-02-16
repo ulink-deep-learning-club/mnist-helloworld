@@ -1,8 +1,9 @@
+import os
+from typing import Any, Dict, Optional
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import os
-from typing import Optional, Dict, Any
 
 
 class CheckpointManager:
@@ -58,17 +59,18 @@ class CheckpointManager:
         if not os.path.exists(filepath):
             raise FileNotFoundError(f"Checkpoint not found: {filepath}")
 
-        checkpoint = torch.load(filepath, map_location="cpu")
+        checkpoint = torch.load(filepath, map_location="cpu", weights_only=True)
         state_dict = checkpoint["model_state_dict"]
         model_state = model.state_dict()
+
+        # Initialize for return values
+        compatible_layers = {}
+        incompatible_keys = []
 
         if strict:
             model.load_state_dict(state_dict, strict=True)
         else:
             # YOLO-style partial loading: only load compatible layers
-            compatible_layers = {}
-            incompatible_keys = []
-
             for k, v in state_dict.items():
                 if k in model_state:
                     if v.shape == model_state[k].shape:
@@ -97,17 +99,36 @@ class CheckpointManager:
                 if len(incompatible_keys) > 10:
                     print(f"  ... and {len(incompatible_keys) - 10} more")
 
-        if optimizer and "optimizer_state_dict" in checkpoint:
+        # Determine if checkpoint was fully restored
+        fully_restored = strict or (len(incompatible_keys) == 0 if not strict else True)
+
+        # Skip optimizer state if model architecture differs
+        load_optimizer = (
+            optimizer and "optimizer_state_dict" in checkpoint and fully_restored
+        )
+
+        if load_optimizer:
             try:
+                assert optimizer is not None, "Optimizer is None, cannot load state"
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             except ValueError as e:
                 print(f"Warning: Could not load optimizer state: {e}")
                 print("Optimizer will be initialized from scratch")
+        elif optimizer and "optimizer_state_dict" in checkpoint and not fully_restored:
+            print(
+                "Model architecture changed, optimizer state will be initialized from scratch"
+            )
+
+        # Determine if checkpoint was fully restored
+        fully_restored = strict or (len(incompatible_keys) == 0 if not strict else True)
 
         return {
             "epoch": checkpoint.get("epoch", 0),
             "loss": checkpoint.get("loss", 0.0),
             "accuracy": checkpoint.get("accuracy", 0.0),
+            "fully_restored": fully_restored,
+            "loaded_layers": len(compatible_layers) if not strict else len(state_dict),
+            "total_layers": len(state_dict),
         }
 
     def save_best_model(

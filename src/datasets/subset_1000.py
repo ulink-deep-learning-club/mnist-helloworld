@@ -1,14 +1,13 @@
 import os
-
+import torch
 import torchvision
+from torch.utils.data import random_split, Subset
 import torchvision.transforms as transforms
-from torch.utils.data import Subset, random_split
-
 from .base import BaseDataset
 
 
-class Subset631Dataset(BaseDataset):
-    """Subset 631 Chinese character dataset."""
+class Subset1000Dataset(BaseDataset):
+    """Subset 1000 Chinese character dataset."""
 
     def __init__(
         self,
@@ -42,9 +41,9 @@ class Subset631Dataset(BaseDataset):
         )
 
     def load_data(self):
-        """Load Subset 631 dataset."""
+        """Load Subset 1000 dataset."""
 
-        data_path = os.path.join(self.root, "subset_631")
+        data_path = os.path.join(self.root, "subset_1000")
 
         full_dataset = torchvision.datasets.ImageFolder(
             root=data_path, transform=self._train_transform
@@ -52,9 +51,6 @@ class Subset631Dataset(BaseDataset):
 
         train_size = int(0.8 * len(full_dataset))
         test_size = len(full_dataset) - train_size
-
-        # Use fixed seed for reproducible split
-        import torch
 
         generator = torch.Generator().manual_seed(42)
         train_dataset, test_dataset = random_split(
@@ -70,7 +66,7 @@ class Subset631Dataset(BaseDataset):
 
     @property
     def num_classes(self) -> int:
-        return 631
+        return 1000
 
     @property
     def input_channels(self) -> int:
@@ -82,7 +78,7 @@ class Subset631Dataset(BaseDataset):
 
     def _reload_train_data(self):
         """Reload training data with current transforms."""
-        data_path = os.path.join(self.root, "subset_631")
+        data_path = os.path.join(self.root, "subset_1000")
 
         full_dataset = torchvision.datasets.ImageFolder(
             root=data_path, transform=self._train_transform

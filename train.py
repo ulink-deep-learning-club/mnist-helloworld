@@ -185,14 +185,47 @@ def main():
         f"Using {train_workers} workers for training, {val_workers} for validation"
     )
 
+    # Validate arguments
+    if args.resume and args.fork:
+        raise ValueError("Cannot use both --resume and --fork at the same time")
+
     # Create experiment manager (YOLO-style runs/expX)
-    experiment_manager = ExperimentManager(base_dir="runs", resume_exp=args.resume)
+    experiment_manager = ExperimentManager(
+        base_dir="runs", resume_exp=args.resume, fork_exp=args.fork
+    )
     logger.info(experiment_manager.get_experiment_info())
 
-    # Check if resuming
+    # Check if resuming or forking
     resume_checkpoint = None
     start_epoch = 0
-    if args.resume:
+    source_checkpoints_dir = experiment_manager.checkpoints_dir
+
+    if args.fork:
+        # Fork: load from source experiment but save to new one
+        assert experiment_manager.fork_source_dir is not None, (
+            "fork_source_dir should be set when forking"
+        )
+        source_checkpoints_dir = os.path.join(
+            experiment_manager.fork_source_dir, "checkpoints"
+        )
+        checkpoint_path = os.path.join(source_checkpoints_dir, "latest_checkpoint.pt")
+        if os.path.exists(checkpoint_path):
+            logger.info(f"Forking from checkpoint: {checkpoint_path}")
+            resume_checkpoint = checkpoint_path
+            # Copy config.yaml from source to new experiment
+            source_config = os.path.join(
+                experiment_manager.fork_source_dir, "config.yaml"
+            )
+            if os.path.exists(source_config):
+                import shutil
+
+                shutil.copy(source_config, experiment_manager.config_file)
+                logger.info(f"Copied config from {source_config}")
+        else:
+            logger.warning(
+                f"No checkpoint found at {checkpoint_path}, starting from scratch"
+            )
+    elif args.resume:
         checkpoint_path = os.path.join(
             experiment_manager.checkpoints_dir, "latest_checkpoint.pt"
         )
@@ -209,10 +242,14 @@ def main():
 
     # Create dataset
     logger.info(f"Creating dataset: {config.dataset['name']}")
+    reapply_transforms = getattr(args, "reapply_transforms", False)
+    if reapply_transforms:
+        logger.info("Reapplying transforms after each epoch")
     dataset = DatasetRegistry.create(
         config.dataset["name"],
         root=config.dataset["root"],
         download=config.dataset["download"],
+        reapply_transforms=reapply_transforms,
     )
 
     # Get data loaders
@@ -241,7 +278,9 @@ def main():
     # Load checkpoint config if resuming
     model_config = None
     if resume_checkpoint:
-        checkpoint_data = torch.load(resume_checkpoint, map_location="cpu")
+        checkpoint_data = torch.load(
+            resume_checkpoint, map_location="cpu", weights_only=True
+        )
         model_config = checkpoint_data.get("model_config", {})
         logger.info(f"Loaded model config from checkpoint: {model_config}")
 
@@ -304,23 +343,71 @@ def main():
         device=device,
         experiment_manager=experiment_manager,
         checkpoint_manager=checkpoint_manager,
+        dataset=dataset,
+        patience=args.patience,
     )
 
-    # Load history and get start epoch if resuming
+    # Load checkpoint weights if resuming or forking
     if resume_checkpoint:
-        start_epoch = trainer.load_history_from_log()
-        logger.info(f"Loaded history from {start_epoch} epochs")
+        # Load history only when resuming (not forking)
+        if args.resume:
+            start_epoch = trainer.load_history_from_log()
+            logger.info(f"Loaded history from {start_epoch} epochs")
 
         # Load checkpoint weights (non-strict to allow partial loading like YOLO)
         try:
             checkpoint_info = checkpoint_manager.load_checkpoint(
                 resume_checkpoint, model, optimizer, strict=False
             )
-            # Use epoch from log file as it's more reliable
-            checkpoint_manager.best_accuracy = checkpoint_info["accuracy"]
+
+            # Check if checkpoint was fully restored
+            if not checkpoint_info.get("fully_restored", True):
+                logger.warning(
+                    f"Checkpoint not fully restored: "
+                    f"{checkpoint_info.get('loaded_layers', 0)}/{checkpoint_info.get('total_layers', 0)} "
+                    f"layers matched. Treating as new architecture."
+                )
+                checkpoint_manager.best_accuracy = 0.0
+                # Clear best_model.pt since it's from a different architecture
+                best_model_path = os.path.join(
+                    experiment_manager.checkpoints_dir, "best_model.pt"
+                )
+                if os.path.exists(best_model_path):
+                    os.remove(best_model_path)
+                    logger.info(
+                        f"Removed old best_model.pt from different architecture"
+                    )
+            else:
+                # Use epoch from log file as it's more reliable
+                checkpoint_manager.best_accuracy = checkpoint_info["accuracy"]
+
+                # Also check best_model.pt to get the true best accuracy
+                # When forking, check source directory; otherwise check current directory
+                best_model_path = os.path.join(source_checkpoints_dir, "best_model.pt")
+                if (
+                    os.path.exists(best_model_path)
+                    and best_model_path != resume_checkpoint
+                ):
+                    best_checkpoint = torch.load(
+                        best_model_path, map_location="cpu", weights_only=True
+                    )
+                    best_acc = best_checkpoint.get("accuracy", 0.0)
+                    if best_acc > checkpoint_manager.best_accuracy:
+                        checkpoint_manager.best_accuracy = best_acc
+                        logger.info(
+                            f"Loaded best accuracy from best_model.pt: {best_acc:.2f}%"
+                        )
+
             logger.info(
-                f"Resumed from epoch {start_epoch}, best accuracy: {checkpoint_info['accuracy']:.2f}%"
+                f"Resumed from epoch {start_epoch}, best accuracy: {checkpoint_manager.best_accuracy:.2f}%"
             )
+
+            # Sync trainer's early stopping state with checkpoint
+            trainer.best_accuracy = checkpoint_manager.best_accuracy
+            trainer.best_epoch = checkpoint_info["epoch"]
+            # Note: epochs_without_improvement resets on resume by design
+            # This allows training to continue and potentially find better results
+            trainer.epochs_without_improvement = 0
         except RuntimeError as e:
             logger.error(f"Failed to load checkpoint: {e}")
             logger.error(
@@ -332,6 +419,8 @@ def main():
             raise
 
     # Start training
+    if args.patience > 0:
+        logger.info(f"Early stopping enabled with patience={args.patience}")
     logger.info(f"Starting training for {config.training['epochs']} epochs")
 
     try:
@@ -340,7 +429,13 @@ def main():
         )
 
         # Print summary
-        logger.info(f"\nTraining completed!")
+        if results.get("stopped_early", False):
+            logger.info(
+                f"\nTraining stopped early (no improvement for {args.patience} epochs)"
+            )
+            logger.info(f"Best epoch: {results['best_epoch']}")
+        else:
+            logger.info(f"\nTraining completed!")
         logger.info(f"Experiment directory: {results['experiment_dir']}")
         logger.info(f"Epochs trained: {results['epochs_trained']}")
         logger.info(f"Best validation accuracy: {results['best_accuracy']:.2f}%")

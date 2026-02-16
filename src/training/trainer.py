@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any, List
 from .metrics import MetricsTracker
 from .checkpoint import CheckpointManager
 from .experiment import ExperimentManager
+from ..datasets.base import BaseDataset
 
 
 class Trainer:
@@ -25,6 +26,8 @@ class Trainer:
         experiment_manager: ExperimentManager,
         checkpoint_manager: Optional[CheckpointManager] = None,
         scheduler: Optional[Any] = None,
+        dataset: Optional[BaseDataset] = None,
+        patience: int = 0,
     ):
         self.model = model
         self.train_loader = train_loader
@@ -35,6 +38,8 @@ class Trainer:
         self.experiment_manager = experiment_manager
         self.checkpoint_manager = checkpoint_manager
         self.scheduler = scheduler
+        self.dataset = dataset
+        self.patience = patience
 
         self.train_metrics = MetricsTracker()
         self.val_metrics = MetricsTracker()
@@ -49,6 +54,22 @@ class Trainer:
             "epoch_time": [],
             "train_speed": [],
             "val_speed": [],
+        }
+
+        # Early stopping tracking
+        self.epochs_without_improvement = 0
+        self.best_epoch = 0
+        self.best_accuracy = 0.0
+        self.stopped_early = False
+
+        # Store original DataLoader settings for recreation
+        self._train_loader_kwargs = {
+            "batch_size": train_loader.batch_size,
+            "shuffle": getattr(train_loader, "shuffle", True),
+            "num_workers": train_loader.num_workers,
+            "pin_memory": train_loader.pin_memory,
+            "drop_last": getattr(train_loader, "drop_last", False),
+            "persistent_workers": getattr(train_loader, "persistent_workers", False),
         }
 
         # Initialize log file only if it doesn't exist
@@ -266,9 +287,11 @@ class Trainer:
         print(f"Experiment directory: {self.experiment_manager.experiment_dir}")
         start_time = time.time()
 
-        best_accuracy = 0.0
+        self.best_accuracy = 0.0
+        last_epoch_trained = start_epoch
 
         for epoch in range(start_epoch, epochs):
+            last_epoch_trained = epoch
             epoch_start_time = time.time()
             current_lr = self._get_current_lr()
 
@@ -349,8 +372,26 @@ class Trainer:
                 )
 
                 if is_best:
-                    best_accuracy = val_metrics["accuracy"]
-                    print(f"New best model saved with accuracy: {best_accuracy:.2f}%")
+                    self.best_accuracy = val_metrics["accuracy"]
+                    self.best_epoch = epoch + 1
+                    self.epochs_without_improvement = 0
+                    print(
+                        f"New best model saved with accuracy: {self.best_accuracy:.2f}%"
+                    )
+                else:
+                    self.epochs_without_improvement += 1
+
+                # Check early stopping
+                if (
+                    self.patience > 0
+                    and self.epochs_without_improvement >= self.patience
+                ):
+                    print(
+                        f"\nEarly stopping triggered! No improvement for {self.patience} epochs. "
+                        f"Best was epoch {self.best_epoch} with accuracy: {self.best_accuracy:.2f}%"
+                    )
+                    self.stopped_early = True
+                    break
 
                 # Save epoch checkpoint periodically
                 if (epoch + 1) % self.checkpoint_manager.save_frequency == 0:
@@ -369,12 +410,27 @@ class Trainer:
             # Plot training curves
             self._plot_training_curves()
 
+            # Reset transforms for next epoch (if enabled)
+            if self.dataset and self.dataset.reapply_transforms:
+                self.dataset.reset_train_transforms()
+                # Recreate DataLoader with updated dataset using stored settings
+                self.train_loader = DataLoader(
+                    self.dataset._train_dataset,  # type: ignore
+                    **self._train_loader_kwargs,
+                )
+
         training_time = time.time() - start_time
 
+        # Calculate actual epochs trained (accounting for early stopping)
+        # last_epoch_trained is 0-indexed, so we add 1 to get the count
+        actual_epochs_trained = last_epoch_trained - start_epoch + 1
+
         return {
-            "epochs_trained": epochs - start_epoch,
-            "best_accuracy": best_accuracy,
+            "epochs_trained": actual_epochs_trained,
+            "best_accuracy": self.best_accuracy,
             "training_time": training_time,
             "history": self.history,
             "experiment_dir": self.experiment_manager.experiment_dir,
+            "stopped_early": self.stopped_early,
+            "best_epoch": self.best_epoch,
         }

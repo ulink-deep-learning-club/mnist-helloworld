@@ -1,6 +1,10 @@
 from typing import Dict, Type
 from .base import BaseDataset
 
+from .mnist import MNISTDataset
+from .cifar import CIFARDataset
+from .subset_631 import Subset631Dataset
+from .subset_1000 import Subset1000Dataset
 
 class DatasetRegistry:
     """Registry for dataset implementations."""
@@ -31,12 +35,8 @@ class DatasetRegistry:
         dataset_class = cls.get(name)
         return dataset_class(**kwargs)
 
-
 # Auto-register datasets
-from .mnist import MNISTDataset
-from .cifar import CIFARDataset
-from .subset_631 import Subset631Dataset
-
 DatasetRegistry.register("mnist", MNISTDataset)
 DatasetRegistry.register("cifar10", CIFARDataset)
 DatasetRegistry.register("subset_631", Subset631Dataset)
+DatasetRegistry.register("subset_1000", Subset1000Dataset)

@@ -35,7 +35,7 @@ class MNISTGUI:
         self.is_detecting = False  # New flag for iterative detection mode
 
         # Dataset for preprocessing
-        self.dataset = MNISTDataset(root='./data', download=True)
+        self.dataset = MNISTDataset(root="./data", download=True)
 
         # Create GUI elements
         self.create_widgets()
@@ -70,32 +70,40 @@ class MNISTGUI:
         # Model selection
         ttk.Label(selection_bar, text="Model:").pack(side=tk.LEFT, padx=5)
         self.model_var = tk.StringVar(value="lenet")
-        model_combo = ttk.Combobox(selection_bar, textvariable=self.model_var,
-                                   values=ModelRegistry.list_available(),
-                                   state="readonly", width=15)
+        model_combo = ttk.Combobox(
+            selection_bar,
+            textvariable=self.model_var,
+            values=ModelRegistry.list_available(),
+            state="readonly",
+            width=15,
+        )
         model_combo.pack(side=tk.LEFT, padx=5)
 
-         # Checkpoint selection
+        # Checkpoint selection
         ttk.Label(selection_bar, text="Checkpoint:").pack(side=tk.LEFT, padx=5)
         self.checkpoint_var = tk.StringVar()
-        self.checkpoint_combo = ttk.Combobox(selection_bar, textvariable=self.checkpoint_var,
-                                            state="readonly", width=30)
+        self.checkpoint_combo = ttk.Combobox(
+            selection_bar, textvariable=self.checkpoint_var, state="readonly", width=30
+        )
         self.checkpoint_combo.pack(side=tk.LEFT, padx=5)
 
         action_bar = ttk.Frame(toolbar)
         action_bar.pack(side=tk.TOP, fill=tk.X, padx=10)
 
         # Load checkpoint button
-        ttk.Button(action_bar, text="Browse",
-                  command=self.browse_checkpoint).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_bar, text="Browse", command=self.browse_checkpoint).pack(
+            side=tk.LEFT, padx=5
+        )
 
         # Load model button
-        ttk.Button(action_bar, text="Load Model",
-                  command=self.load_model).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_bar, text="Load Model", command=self.load_model).pack(
+            side=tk.LEFT, padx=5
+        )
 
         # Refresh checkpoints button
-        ttk.Button(action_bar, text="Refresh",
-                  command=self.refresh_checkpoints).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_bar, text="Refresh", command=self.refresh_checkpoints).pack(
+            side=tk.LEFT, padx=5
+        )
 
         # Initial checkpoint list refresh
         self.refresh_checkpoints()
@@ -110,8 +118,9 @@ class MNISTGUI:
         self.camera_label.pack(fill=tk.BOTH, expand=True)
 
         # Camera status
-        self.camera_status = ttk.Label(camera_frame, text="Camera: Starting...",
-                                      foreground="blue")
+        self.camera_status = ttk.Label(
+            camera_frame, text="Camera: Starting...", foreground="blue"
+        )
         self.camera_status.pack(pady=5)
 
     def create_prediction_container(self, parent):
@@ -120,8 +129,9 @@ class MNISTGUI:
         pred_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0), pady=5)
 
         # Prediction display
-        self.prediction_label = ttk.Label(pred_frame, text="No prediction yet",
-                                         font=("Arial", 16))
+        self.prediction_label = ttk.Label(
+            pred_frame, text="No prediction yet", font=("Arial", 16)
+        )
         self.prediction_label.pack(pady=20)
 
         # Confidence scores
@@ -148,19 +158,23 @@ class MNISTGUI:
         control_frame.pack(fill=tk.X, padx=10, pady=5)
 
         # Toggle detection button
-        self.detect_button = ttk.Button(control_frame, text="Start Detection",
-                                       command=self.toggle_detection)
+        self.detect_button = ttk.Button(
+            control_frame, text="Start Detection", command=self.toggle_detection
+        )
         self.detect_button.pack(side=tk.LEFT, padx=5)
 
         # Manual capture button (always available)
-        ttk.Button(control_frame, text="Manual Capture",
-                  command=self.capture_and_predict).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            control_frame, text="Manual Capture", command=self.capture_and_predict
+        ).pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(control_frame, text="Clear Prediction",
-                  command=self.clear_prediction).pack(side=tk.LEFT, padx=5)
+        ttk.Button(
+            control_frame, text="Clear Prediction", command=self.clear_prediction
+        ).pack(side=tk.LEFT, padx=5)
 
-        ttk.Button(control_frame, text="Exit",
-                  command=self.on_closing).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(control_frame, text="Exit", command=self.on_closing).pack(
+            side=tk.RIGHT, padx=5
+        )
 
     def start_camera(self):
         """Initialize and start camera capture"""
@@ -174,7 +188,9 @@ class MNISTGUI:
             self.update_camera()
 
         except Exception as e:
-            self.camera_status.config(text=f"Camera: Error - {str(e)}", foreground="red")
+            self.camera_status.config(
+                text=f"Camera: Error - {str(e)}", foreground="red"
+            )
             messagebox.showerror("Camera Error", f"Failed to start camera: {str(e)}")
 
     def update_camera(self):
@@ -183,11 +199,15 @@ class MNISTGUI:
             ret, frame = self.cap.read()
             if ret:
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                frame = cv2.resize(cv2.resize(frame, (320,180))[0:180, 70:250], (28, 28))
+                frame = cv2.resize(
+                    cv2.resize(frame, (320, 180))[0:180, 70:250], (28, 28)
+                )
                 frame = torch.from_numpy(frame).to(self.device)
                 min_val = frame.min()
                 max_val = frame.max()
-                normalized = 1 - ((frame.to(torch.float32) - min_val) / (max_val - min_val + 1e-6))
+                normalized = 1 - (
+                    (frame.to(torch.float32) - min_val) / (max_val - min_val + 1e-6)
+                )
                 normalized = torch.pow(torch.pow(normalized + 0.3, 4).clip(0, 1), 4)
                 normalized = (normalized / normalized.max()) * 255
                 normalized = normalized.to(torch.uint8)
@@ -195,12 +215,18 @@ class MNISTGUI:
                 self.current_frame = normalized
 
                 # Convert to PIL Image and then to PhotoImage
-                image = Image.fromarray(cv2.resize(normalized.cpu().numpy(), (224, 224), interpolation=cv2.INTER_NEAREST))
+                image = Image.fromarray(
+                    cv2.resize(
+                        normalized.cpu().numpy(),
+                        (224, 224),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                )
                 photo = ImageTk.PhotoImage(image=image)
 
                 # Update label
                 self.camera_label.config(image=photo)
-                setattr(self.camera_label, 'image', photo)  # Keep a reference
+                setattr(self.camera_label, "image", photo)  # Keep a reference
 
             # Schedule next update
             self.root.after(30, self.update_camera)
@@ -231,14 +257,18 @@ class MNISTGUI:
 
             self.prediction_label.config(
                 text=f"Predicted: {pred_class} (Confidence: {pred_confidence:.2%})",
-                foreground="green" if pred_confidence > 0.8 else "orange" if pred_confidence > 0.5 else "red"
+                foreground="green"
+                if pred_confidence > 0.8
+                else "orange"
+                if pred_confidence > 0.5
+                else "red",
             )
 
             # Update probability bars
             probs = probabilities.squeeze().cpu().numpy()
             for i, (bar, label) in enumerate(self.probability_bars):
                 prob_percent = probs[i] * 100
-                bar['value'] = prob_percent
+                bar["value"] = prob_percent
                 label.config(text=f"{prob_percent:.1f}%")
 
         except Exception as e:
@@ -276,19 +306,19 @@ class MNISTGUI:
         if os.path.exists(checkpoint_dir):
             for root, dirs, files in os.walk(checkpoint_dir):
                 for filename in files:
-                    if filename.endswith(('.pth', '.pt')):
+                    if filename.endswith((".pth", ".pt")):
                         checkpoints.append(os.path.join(root, filename))
 
         # Also check root directory for model files
-        for filename in os.listdir('.'):
-            if filename.endswith('.pth') and 'model' in filename.lower():
+        for filename in os.listdir("."):
+            if filename.endswith(".pth") and "model" in filename.lower():
                 checkpoints.append(filename)
 
         if checkpoints:
-            self.checkpoint_combo['values'] = sorted(checkpoints)
+            self.checkpoint_combo["values"] = sorted(checkpoints)
             self.checkpoint_var.set(checkpoints[0])
         else:
-            self.checkpoint_combo['values'] = ["No checkpoints found"]
+            self.checkpoint_combo["values"] = ["No checkpoints found"]
             self.checkpoint_var.set("No checkpoints found")
 
     def load_model(self):
@@ -303,20 +333,20 @@ class MNISTGUI:
         try:
             # Create model
             self.model = ModelRegistry.create(
-                model_name,
-                num_classes=10,
-                input_channels=1
+                model_name, num_classes=10, input_channels=1
             )
 
             # Load checkpoint with error handling for different formats
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            checkpoint = torch.load(
+                checkpoint_path, map_location=self.device, weights_only=True
+            )
 
             # Handle different checkpoint formats
             if isinstance(checkpoint, dict):
-                if 'model_state_dict' in checkpoint:
-                    self.model.load_state_dict(checkpoint['model_state_dict'])
-                elif 'state_dict' in checkpoint:
-                    self.model.load_state_dict(checkpoint['state_dict'])
+                if "model_state_dict" in checkpoint:
+                    self.model.load_state_dict(checkpoint["model_state_dict"])
+                elif "state_dict" in checkpoint:
+                    self.model.load_state_dict(checkpoint["state_dict"])
                 else:
                     # Assume the checkpoint is just the state dict
                     self.model.load_state_dict(checkpoint)
@@ -368,13 +398,15 @@ class MNISTGUI:
                 # If there's an error, stop detection and show error message
                 self.is_detecting = False
                 self.detect_button.config(text="Start Detection", style="TButton")
-                messagebox.showerror("Detection Error", f"Iterative detection failed: {str(e)}")
+                messagebox.showerror(
+                    "Detection Error", f"Iterative detection failed: {str(e)}"
+                )
 
     def clear_prediction(self):
         """Clear current prediction"""
         self.prediction_label.config(text="No prediction yet", foreground="black")
         for bar, label in self.probability_bars:
-            bar['value'] = 0
+            bar["value"] = 0
             label.config(text="0%")
 
     def on_closing(self):

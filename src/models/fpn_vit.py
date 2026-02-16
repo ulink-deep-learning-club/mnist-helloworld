@@ -55,6 +55,108 @@ class Attention(nn.Module):
         return x
 
 
+class LinearAttention(nn.Module):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = head_dim**-0.5
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+        # kernel function：elu+1（确保非负）
+        self.kernel_fn = nn.ELU()
+
+    def forward(self, x):
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv[0], qkv[1], qkv[2]  # [B, heads, N, head_dim]
+
+        q = self.kernel_fn(q) + 1
+        k = self.kernel_fn(k) + 1
+
+        # (Q @ (K^T @ V)) / scaling
+        q = q * self.scale
+        # K^T @ V  [B, heads, head_dim, head_dim]
+        kv = k.transpose(-2, -1) @ v
+        # Q @ KV  [B, heads, N, head_dim]
+        x = q @ kv
+
+        x = x.transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
+class FocusedLinearAttention(nn.Module):
+    """
+    Focused Linear Attention (ICCV 2023)
+    核心改进：加入 focusing factor 让注意力分布更尖锐
+    """
+
+    def __init__(
+        self,
+        dim,
+        num_heads=8,
+        qkv_bias=False,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        focusing_factor=3,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scaling = self.head_dim**-0.5
+        self.focusing_factor = focusing_factor
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.proj = nn.Linear(dim, dim)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        # learnable focusing param
+        self.dwc = nn.Conv1d(dim, dim, kernel_size=3, padding=1, groups=dim)
+
+    def forward(self, x):
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, self.head_dim)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv.unbind(0)  # (B, heads, N, d)
+
+        # 1. ReLU kernel mapping (ensure non-negative)
+        q = F.relu(q) + 1e-6
+        k = F.relu(k) + 1e-6
+
+        # 2. L2 norm + focusing factor (make distribution sharper)
+        q = q / q.sum(dim=-1, keepdim=True)  # normalize along feature dim
+        k = k / k.sum(dim=-1, keepdim=True)
+        q = q**self.focusing_factor  # power operation to make distribution sharper
+        k = k**self.focusing_factor
+        q = q / q.sum(dim=-1, keepdim=True)  # re-normalize
+        k = k / k.sum(dim=-1, keepdim=True)
+
+        # 3. linear attention: first calc K^T @ V, complexity O(Nd^2)
+        kv = torch.einsum("bhnd,bhne->bhde", k, v)  # (B, h, d, d)
+        z = 1.0 / (torch.einsum("bhnd,bhd->bhn", q, k.sum(dim=2)) + 1e-6)  # normalization factor
+        out = torch.einsum("bhnd,bhde,bhn->bhne", q, kv, z)  # (B, h, N, d)
+
+        # 4. Local feature enhancement (compensate for lost local info in linear attention)
+        out = out.transpose(1, 2).reshape(B, N, C)
+        out = out + self.dwc(out.transpose(1, 2)).transpose(1, 2)
+
+        out = self.proj(out)
+        out = self.proj_drop(out)
+        return out
+
+
 class Mlp(nn.Module):
     def __init__(
         self,
@@ -83,16 +185,33 @@ class Mlp(nn.Module):
 
 class Block(nn.Module):
     def __init__(
-        self, dim, num_heads, mlp_ratio=4.0, qkv_bias=False, drop=0.0, attn_drop=0.0
+        self,
+        dim,
+        num_heads,
+        mlp_ratio=4.0,
+        qkv_bias=False,
+        drop=0.0,
+        attn_drop=0.0,
+        linear_attention=False,
     ):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = Attention(
-            dim,
-            num_heads=num_heads,
-            qkv_bias=qkv_bias,
-            attn_drop=attn_drop,
-            proj_drop=drop,
+        self.attn = (
+            Attention(
+                dim,
+                num_heads=num_heads,
+                qkv_bias=qkv_bias,
+                attn_drop=attn_drop,
+                proj_drop=drop,
+            )
+            if not linear_attention
+            else FocusedLinearAttention(
+                dim,
+                num_heads=num_heads,
+                qkv_bias=qkv_bias,
+                attn_drop=attn_drop,
+                proj_drop=drop,
+            )
         )
         self.norm2 = nn.LayerNorm(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -135,6 +254,8 @@ class VisionTransformer(nn.Module):
         num_heads=8,
         mlp_ratio=4.0,
         drop_rate=0.2,
+        linear_attention=False,
+        linear_layer_limit=4,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -150,8 +271,11 @@ class VisionTransformer(nn.Module):
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     drop=drop_rate,
+                    linear_attention=linear_attention
+                    if i < linear_layer_limit
+                    else False,
                 )
-                for _ in range(depth)
+                for i in range(depth)
             ]
         )
 
@@ -177,29 +301,52 @@ class VisionTransformer(nn.Module):
 class PyramidFeatureExtractor(nn.Module):
     """Concatenation-based Pyramid Feature Extractor for better SE reweighting."""
 
-    def __init__(self, input_channels=3, lateral_channels_list=[64,128,256], out_dim=256):
+    def __init__(
+        self, input_channels=3, lateral_channels_list=[64, 128, 256], out_dim=256
+    ):
         super().__init__()
         self.layer1 = nn.Sequential(
-            nn.Conv2d(input_channels, lateral_channels_list[0], kernel_size=3, stride=2, padding=1),  # 64x64 -> 32x32
+            nn.Conv2d(
+                input_channels,
+                lateral_channels_list[0],
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            ),  # 64x64 -> 32x32
             nn.BatchNorm2d(lateral_channels_list[0]),
             nn.SiLU(inplace=True),
         )
         self.layer2 = nn.Sequential(
-            nn.Conv2d(lateral_channels_list[0], lateral_channels_list[1], kernel_size=3, stride=2, padding=1),  # 32x32 -> 16x16
+            nn.Conv2d(
+                lateral_channels_list[0],
+                lateral_channels_list[1],
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            ),  # 32x32 -> 16x16
             nn.BatchNorm2d(lateral_channels_list[1]),
             nn.SiLU(inplace=True),
         )
         self.layer3 = nn.Sequential(
-            nn.Conv2d(lateral_channels_list[1], lateral_channels_list[2], kernel_size=3, stride=2, padding=1),  # 16x16 -> 8x8
+            nn.Conv2d(
+                lateral_channels_list[1],
+                lateral_channels_list[2],
+                kernel_size=3,
+                stride=2,
+                padding=1,
+            ),  # 16x16 -> 8x8
             nn.BatchNorm2d(lateral_channels_list[2]),
             nn.SiLU(inplace=True),
         )
 
-        self.lateral1 = nn.Conv2d(lateral_channels_list[0], out_dim, 3, stride=2, padding=1)
+        self.lateral1 = nn.Sequential(
+            nn.Conv2d(lateral_channels_list[0], out_dim, 1),
+            nn.AvgPool2d(2),
+        )
         self.lateral2 = nn.Conv2d(lateral_channels_list[1], out_dim, 1)
         self.lateral3 = nn.Sequential(
             nn.Conv2d(lateral_channels_list[2], out_dim, 1),
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
         )
 
         # Scale-specific SE (optional shared weights)
@@ -209,9 +356,9 @@ class PyramidFeatureExtractor(nn.Module):
 
         # Fusion conv: reduce channels after concatenation
         self.fusion_conv = nn.Sequential(
-            nn.Conv2d(out_dim*3, out_dim, 1),
+            nn.Conv2d(out_dim * 3, out_dim, 1),
             nn.BatchNorm2d(out_dim),
-            nn.SiLU(inplace=True)
+            nn.SiLU(inplace=True),
         )
 
     def forward(self, x):
@@ -221,9 +368,9 @@ class PyramidFeatureExtractor(nn.Module):
         c3 = self.layer3(c2)  # 8x8, 256ch
 
         # 1. Unify channels
-        p1 = self.lateral1(c1)   # 32x32, out_dim
-        p2 = self.lateral2(c2)   # 16x16, out_dim
-        p3 = self.lateral3(c3)   # 8x8, out_dim
+        p1 = self.lateral1(c1)  # 32x32, out_dim
+        p2 = self.lateral2(c2)  # 16x16, out_dim
+        p3 = self.lateral3(c3)  # 8x8, out_dim
 
         # 2. Apply SE independently
         p1 = self.se1(p1)
@@ -232,7 +379,7 @@ class PyramidFeatureExtractor(nn.Module):
 
         # 4. Concatenate and fuse
         fused = torch.cat([p1, p2, p3], dim=1)  # (B, out_dim*3, 16, 16)
-        out = self.fusion_conv(fused)           # (B, out_dim, 16, 16)
+        out = self.fusion_conv(fused)  # (B, out_dim, 16, 16)
         return out
 
 
@@ -245,13 +392,14 @@ class FeaturePyramidViT(BaseModel):
     def __init__(
         self,
         img_size=64,
+        preprocess_channels=32,
         fpn_out_channels=128,
         embed_dim=192,
-        patch_size=8,
+        patch_size=16,
         input_channels=3,
         num_classes=631,
-        depth=8,
-        num_heads=8,
+        depth=6,
+        num_heads=12,
         mlp_ratio=4.0,
         drop_rate=0.2,
         **kwargs,
@@ -262,15 +410,15 @@ class FeaturePyramidViT(BaseModel):
 
         self.embed_dim = embed_dim
 
-        self.image_mono_channel = nn.Sequential(
-            nn.Conv2d(input_channels, 1, kernel_size=1),
-            nn.BatchNorm2d(1),
+        self.image_preprocess = nn.Sequential(
+            nn.Conv2d(input_channels, preprocess_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(preprocess_channels),
             nn.SiLU(inplace=True),
         )
 
         # Stage 1: Pyramid Feature Extractor & Channel Reduction
         self.pyramid_extractor = PyramidFeatureExtractor(
-            input_channels=1,
+            input_channels=preprocess_channels,
             lateral_channels_list=[64, 128, 256],
             out_dim=fpn_out_channels,
         )
@@ -280,7 +428,11 @@ class FeaturePyramidViT(BaseModel):
         num_patches = ((img_size // 4) // stride) ** 2
         self.conv_bottleneck = nn.Sequential(
             nn.Conv2d(
-                fpn_out_channels, self.embed_dim, kernel_size=3, padding=1, stride=stride
+                fpn_out_channels,
+                self.embed_dim,
+                kernel_size=3,
+                padding=1,
+                stride=stride,
             ),
             nn.BatchNorm2d(self.embed_dim),
             nn.SiLU(inplace=True),
@@ -295,14 +447,16 @@ class FeaturePyramidViT(BaseModel):
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
             drop_rate=drop_rate,
+            linear_attention=True,
+            linear_layer_limit=4,
         )
 
         # Stage 5: Classification Head (2x FC with more capacity)
         self.head = nn.Sequential(
-            nn.Linear(self.embed_dim, self.embed_dim // 2),
+            nn.Linear(self.embed_dim, self.embed_dim),
             nn.SiLU(inplace=True),
             nn.Dropout(drop_rate),
-            nn.Linear(self.embed_dim // 2, num_classes),
+            nn.Linear(self.embed_dim, num_classes),
         )
 
         self._init_weights()
@@ -319,7 +473,7 @@ class FeaturePyramidViT(BaseModel):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
         elif isinstance(m, nn.Conv2d):
-            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity='relu')
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
@@ -327,10 +481,7 @@ class FeaturePyramidViT(BaseModel):
             nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        # Convert to grayscale if needed
-        if x.shape[1] != 1:
-            assert x.shape[1] == self.input_channels, f"Expected {self.input_channels} channels for input, got {x.shape[1]}"
-            x = self.image_mono_channel(x)
+        x = self.image_preprocess(x)
 
         # Stage 1: FPN Feature Extraction
         x = self.pyramid_extractor(x)
@@ -352,4 +503,4 @@ if __name__ == "__main__":
     from torchinfo import summary
 
     model = FeaturePyramidViT()
-    summary(model, input_size=(1, 3, 64, 64))
+    summary(model, input_size=(1, 3, 64, 64), depth=4)

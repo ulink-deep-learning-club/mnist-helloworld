@@ -94,7 +94,7 @@ def create_config_parser() -> argparse.ArgumentParser:
         "--dataset",
         type=str,
         default="mnist",
-        choices=["mnist", "cifar10", "subset_631"],
+        choices=["mnist", "cifar10", "subset_631", "subset_1000"],
         help="Dataset to use",
     )
     parser.add_argument(
@@ -152,6 +152,14 @@ def create_config_parser() -> argparse.ArgumentParser:
         help="Resume training from a specific experiment (e.g., exp1, exp2)",
     )
 
+    # Fork training
+    parser.add_argument(
+        "--fork",
+        type=str,
+        metavar="EXP",
+        help="Fork training from a specific experiment - loads checkpoint but saves to a new experiment",
+    )
+
     # Layer freezing
     parser.add_argument(
         "--freeze",
@@ -163,6 +171,21 @@ def create_config_parser() -> argparse.ArgumentParser:
             "(2) ID ranges: --freeze 2-1:2-5; "
             "(3) Name patterns: --freeze features classifier"
         ),
+    )
+
+    # Data augmentation
+    parser.add_argument(
+        "--reapply-transforms",
+        action="store_true",
+        help="Reapply random transforms after each epoch for better generalization",
+    )
+
+    # Early stopping
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=0,
+        help="Early stopping patience (0 to disable). Stops training if no improvement after N epochs.",
     )
 
     return parser
