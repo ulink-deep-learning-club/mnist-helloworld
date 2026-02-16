@@ -162,6 +162,35 @@ def create_optimizer(model, config):
         raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
 
+def create_scheduler(optimizer, config):
+    """Create learning rate scheduler based on configuration."""
+    scheduler_name = config.optimization.get("scheduler", "none").lower()
+
+    if scheduler_name == "none":
+        return None
+    elif scheduler_name == "step":
+        step_size = config.optimization.get("scheduler_step_size", 10)
+        gamma = config.optimization.get("scheduler_gamma", 0.1)
+        return optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    elif scheduler_name == "cosine":
+        t_max = config.optimization.get("scheduler_t_max", 100)
+        eta_min = config.optimization.get("scheduler_eta_min", 1e-6)
+        return optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=t_max, eta_min=eta_min
+        )
+    elif scheduler_name == "plateau":
+        patience = config.optimization.get("scheduler_patience", 5)
+        factor = config.optimization.get("scheduler_factor", 0.1)
+        return optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, mode="max", patience=patience, factor=factor
+        )
+    elif scheduler_name == "exponential":
+        gamma = config.optimization.get("scheduler_gamma", 0.95)
+        return optim.lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+    else:
+        raise ValueError(f"Unknown scheduler: {scheduler_name}")
+
+
 def main():
     """Main training function."""
     # Parse arguments
@@ -332,6 +361,10 @@ def main():
     # Create criterion and optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = create_optimizer(model, config)
+    scheduler = create_scheduler(optimizer, config)
+
+    if scheduler:
+        logger.info(f"Using scheduler: {config.optimization.get('scheduler', 'none')}")
 
     # Create trainer first
     trainer = Trainer(
@@ -345,6 +378,7 @@ def main():
         checkpoint_manager=checkpoint_manager,
         dataset=dataset,
         patience=args.patience,
+        scheduler=scheduler,
     )
 
     # Load checkpoint weights if resuming or forking

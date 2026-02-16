@@ -48,6 +48,13 @@ class Config:
             "optimization": {
                 "learning_rate": args.learning_rate,
                 "optimizer": args.optimizer,
+                "scheduler": args.scheduler,
+                "scheduler_step_size": args.scheduler_step_size,
+                "scheduler_gamma": args.scheduler_gamma,
+                "scheduler_t_max": args.scheduler_t_max,
+                "scheduler_eta_min": args.scheduler_eta_min,
+                "scheduler_patience": args.scheduler_patience,
+                "scheduler_factor": args.scheduler_factor,
             },
             "checkpointing": {
                 "checkpoint_dir": args.checkpoint_dir,
@@ -80,6 +87,13 @@ def get_default_config() -> Dict[str, Any]:
             "learning_rate": 1e-3,
             "optimizer": "adamw",
             "weight_decay": 0.01,
+            "scheduler": "none",
+            "scheduler_step_size": 10,
+            "scheduler_gamma": 0.1,
+            "scheduler_t_max": 100,
+            "scheduler_eta_min": 1e-6,
+            "scheduler_patience": 5,
+            "scheduler_factor": 0.1,
         },
         "checkpointing": {"checkpoint_dir": "checkpoints", "save_frequency": 10},
     }
@@ -128,6 +142,49 @@ def create_config_parser() -> argparse.ArgumentParser:
         default="adamw",
         choices=["adamw", "adam", "sgd"],
         help="Optimizer",
+    )
+    parser.add_argument(
+        "--scheduler",
+        type=str,
+        default="none",
+        choices=["none", "step", "cosine", "plateau", "exponential"],
+        help="Learning rate scheduler",
+    )
+    parser.add_argument(
+        "--scheduler-step-size",
+        type=int,
+        default=10,
+        help="Step size for StepLR scheduler",
+    )
+    parser.add_argument(
+        "--scheduler-gamma",
+        type=float,
+        default=0.1,
+        help="Gamma for learning rate decay",
+    )
+    parser.add_argument(
+        "--scheduler-t-max",
+        type=int,
+        default=100,
+        help="T_max for CosineAnnealingLR",
+    )
+    parser.add_argument(
+        "--scheduler-eta-min",
+        type=float,
+        default=1e-6,
+        help="Eta_min for CosineAnnealingLR",
+    )
+    parser.add_argument(
+        "--scheduler-patience",
+        type=int,
+        default=5,
+        help="Patience for ReduceLROnPlateau",
+    )
+    parser.add_argument(
+        "--scheduler-factor",
+        type=float,
+        default=0.1,
+        help="Factor for ReduceLROnPlateau",
     )
 
     # Checkpointing arguments
