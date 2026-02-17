@@ -4,7 +4,7 @@ from .base import BaseDataset
 from .mnist import MNISTDataset
 from .cifar import CIFARDataset
 from .subset_631 import Subset631Dataset
-from .subset_1000 import Subset1000Dataset
+from .subset_1000 import Subset1000Dataset, TripletSubset1000Dataset
 from .triplet_mnist import TripletMNISTDataset, BalancedTripletMNISTDataset
 
 
