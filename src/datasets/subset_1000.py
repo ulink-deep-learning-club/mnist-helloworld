@@ -338,10 +338,13 @@ class TripletSubset1000Dataset(BaseDataset):
 
         triplets = []
 
+        # Convert to set for O(1) lookup - critical for performance
+        available_set = set(available_indices)
+
         # Filter data_by_label to only include available indices
         available_by_label = {}
         for label, indices in data_by_label.items():
-            available = [idx for idx in indices if idx in available_indices]
+            available = [idx for idx in indices if idx in available_set]
             if len(available) >= 2:  # Need at least 2 for anchor and positive
                 available_by_label[label] = available
 
