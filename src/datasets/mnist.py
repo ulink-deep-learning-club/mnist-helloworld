@@ -6,6 +6,10 @@ from .base import BaseDataset
 class MNISTDataset(BaseDataset):
     """MNIST dataset implementation."""
 
+    @property
+    def dataset_type(self) -> str:
+        return "standard"
+
     def get_train_transform(self) -> transforms.Compose:
         return transforms.Compose(
             [

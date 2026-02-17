@@ -7,6 +7,8 @@ import torchvision.transforms as transforms
 class BaseDataset(ABC):
     """Abstract base class for all datasets."""
 
+    DATASET_TYPES = ["standard", "pairwise", "triplet"]
+
     def __init__(
         self,
         root: str = "./data",
@@ -20,6 +22,12 @@ class BaseDataset(ABC):
         self._test_dataset: Optional[Dataset] = None
         self._train_transform = self.get_train_transform()
         self._test_transform = self.get_test_transform()
+
+    @property
+    @abstractmethod
+    def dataset_type(self) -> str:
+        """Dataset paradigm type. Must be one of DATASET_TYPES."""
+        pass
 
     @abstractmethod
     def get_train_transform(self) -> transforms.Compose:
@@ -83,6 +91,7 @@ class BaseDataset(ABC):
         """Get dataset information."""
         return {
             "name": self.__class__.__name__,
+            "type": self.dataset_type,
             "num_classes": self.num_classes,
             "input_channels": self.input_channels,
             "input_size": self.input_size,

@@ -2,7 +2,7 @@ torch
 torchvision
 tqdm
 pyyaml
-opencv-python
+opencv-python-headless
 pillow
 matplotlib
 torchinfo

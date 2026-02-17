@@ -1,23 +1,46 @@
 import torch.nn as nn
+from typing import Any
 from .base import BaseModel
+from ..training.metrics import MetricsTracker
+
 
 class LeNet(BaseModel):
     """Classic LeNet-5 implementation."""
-    
-    def __init__(self, num_classes: int = 10, input_channels: int = 1, input_size: tuple = (28, 28), **kwargs):
+
+    @property
+    def model_type(self) -> str:
+        return "classification"
+
+    @classmethod
+    def get_criterion(cls, **kwargs) -> nn.Module:
+        """Return CrossEntropyLoss for classification."""
+        return nn.CrossEntropyLoss()
+
+    @classmethod
+    def get_metrics_tracker(cls, **kwargs) -> Any:
+        """Return standard metrics tracker for classification."""
+        return MetricsTracker()
+
+    def __init__(
+        self,
+        num_classes: int = 10,
+        input_channels: int = 1,
+        input_size: tuple = (28, 28),
+        **kwargs,
+    ):
         super().__init__(num_classes, input_channels)
-        
+
         self.input_size = input_size
-        
+
         self.features = nn.Sequential(
             nn.Conv2d(input_channels, 6, kernel_size=5),
             nn.ReLU(),
             nn.AvgPool2d(kernel_size=2, stride=2),
             nn.Conv2d(6, 16, kernel_size=5),
             nn.ReLU(),
-            nn.AvgPool2d(kernel_size=2, stride=2)
+            nn.AvgPool2d(kernel_size=2, stride=2),
         )
-        
+
         # Calculate the size of the flattened features
         # For 28x28 input: (28-5+1)/2 = 12, (12-5+1)/2 = 4, so 16*4*4 = 256
         # For 32x32 input: (32-5+1)/2 = 14, (14-5+1)/2 = 5, so 16*5*5 = 400
@@ -33,15 +56,15 @@ class LeNet(BaseModel):
             w = (w - 5 + 1) // 2  # After first conv and pool
             w = (w - 5 + 1) // 2  # After second conv and pool
             self.flattened_size = 16 * h * w
-        
+
         self.classifier = nn.Sequential(
             nn.Linear(self.flattened_size, 120),
             nn.ReLU(),
             nn.Linear(120, 84),
             nn.ReLU(),
-            nn.Linear(84, num_classes)
+            nn.Linear(84, num_classes),
         )
-    
+
     def forward(self, x):
         x = self.features(x)
         x = x.view(x.size(0), -1)  # Flatten dynamically

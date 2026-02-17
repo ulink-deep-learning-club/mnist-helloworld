@@ -26,6 +26,10 @@ class AlbumentationsTransform:
 class Subset1000Dataset(BaseDataset):
     """Subset 1000 Chinese character dataset."""
 
+    @property
+    def dataset_type(self) -> str:
+        return "standard"
+
     def __init__(
         self,
         root: str = "./data",

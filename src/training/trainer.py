@@ -5,8 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import time
 import os
-from typing import Optional, Dict, Any, List
-from .metrics import MetricsTracker
+from typing import Optional, Dict, Any
 from .checkpoint import CheckpointManager
 from .experiment import ExperimentManager
 from ..datasets.base import BaseDataset
@@ -41,8 +40,17 @@ class Trainer:
         self.dataset = dataset
         self.patience = patience
 
-        self.train_metrics = MetricsTracker()
-        self.val_metrics = MetricsTracker()
+        # Detect training paradigm based on model and dataset types
+        self.paradigm = self._detect_paradigm()
+
+        # Initialize metrics trackers using model's method
+        model_class = model.__class__
+        self.train_metrics = model_class.get_metrics_tracker(
+            **getattr(criterion, "__dict__", {})
+        )
+        self.val_metrics = model_class.get_metrics_tracker(
+            **getattr(criterion, "__dict__", {})
+        )
 
         # Training history for plotting
         self.history = {
@@ -75,6 +83,15 @@ class Trainer:
         # Initialize log file only if it doesn't exist
         if not os.path.exists(self.experiment_manager.log_file):
             self._init_log_file()
+
+    def _detect_paradigm(self) -> str:
+        """Detect training paradigm from model and dataset types."""
+        model_type = getattr(self.model, "model_type", "classification")
+        dataset_type = getattr(self.dataset, "dataset_type", "standard")
+
+        if model_type == "siamese" or dataset_type == "triplet":
+            return "triplet"
+        return "classification"
 
     def _init_log_file(self):
         """Initialize training log file with headers."""
@@ -148,22 +165,58 @@ class Trainer:
         start_time = time.time()
         num_batches = len(self.train_loader)
 
-        for batch_idx, (images, labels) in enumerate(pbar):
-            images, labels = images.to(self.device), labels.to(self.device)
+        if self.paradigm == "triplet":
+            # Triplet training
+            for batch_idx, (anchor, positive, negative, labels) in enumerate(pbar):
+                anchor = anchor.to(self.device)
+                positive = positive.to(self.device)
+                negative = negative.to(self.device)
 
-            self.optimizer.zero_grad()
-            outputs = self.model(images)
-            loss = self.criterion(outputs, labels)
-            loss.backward()
-            self.optimizer.step()
+                self.optimizer.zero_grad()
 
-            self.train_metrics.update(loss.item(), outputs, labels)
+                # Get embeddings for all three
+                anchor_emb = self.model(anchor)
+                positive_emb = self.model(positive)
+                negative_emb = self.model(negative)
 
-            # Update progress bar
-            metrics = self.train_metrics.get_metrics()
-            pbar.set_postfix(
-                {"Loss": f"{metrics['loss']:.4f}", "Acc": f"{metrics['accuracy']:.2f}%"}
-            )
+                # Compute triplet loss
+                loss = self.criterion(anchor_emb, positive_emb, negative_emb)
+                loss.backward()
+                self.optimizer.step()
+
+                self.train_metrics.update(
+                    loss.item(), anchor_emb, positive_emb, negative_emb
+                )
+
+                # Update progress bar
+                metrics = self.train_metrics.get_metrics()
+                postfix = {"Loss": f"{metrics['loss']:.4f}"}
+                if "pos_dist" in metrics and "neg_dist" in metrics:
+                    postfix["PosDist"] = f"{metrics['pos_dist']:.3f}"
+                    postfix["NegDist"] = f"{metrics['neg_dist']:.3f}"
+                postfix["Valid"] = f"{metrics['accuracy']:.1f}%"
+                pbar.set_postfix(postfix)
+        else:
+            # Standard classification training
+            for batch_idx, (images, labels) in enumerate(pbar):
+                images, labels = images.to(self.device), labels.to(self.device)
+
+                self.optimizer.zero_grad()
+                outputs = self.model(images)
+                loss = self.criterion(outputs, labels)
+                loss.backward()
+                self.optimizer.step()
+
+                self.train_metrics.update(loss.item(), outputs, labels)
+
+                # Update progress bar
+                metrics = self.train_metrics.get_metrics()
+                pbar.set_postfix(
+                    {
+                        "Loss": f"{metrics['loss']:.4f}",
+                        "Acc": f"{metrics['accuracy']:.2f}%",
+                    }
+                )
 
         elapsed_time = time.time() - start_time
         speed = num_batches / elapsed_time if elapsed_time > 0 else 0
@@ -180,21 +233,50 @@ class Trainer:
         num_batches = len(self.val_loader)
 
         with torch.no_grad():
-            for images, labels in pbar:
-                images, labels = images.to(self.device), labels.to(self.device)
-                outputs = self.model(images)
-                loss = self.criterion(outputs, labels)
+            if self.paradigm == "triplet":
+                # Triplet validation
+                for anchor, positive, negative, labels in pbar:
+                    anchor = anchor.to(self.device)
+                    positive = positive.to(self.device)
+                    negative = negative.to(self.device)
 
-                self.val_metrics.update(loss.item(), outputs, labels)
+                    # Get embeddings
+                    anchor_emb = self.model(anchor)
+                    positive_emb = self.model(positive)
+                    negative_emb = self.model(negative)
 
-                # Update progress bar
-                metrics = self.val_metrics.get_metrics()
-                pbar.set_postfix(
-                    {
-                        "Loss": f"{metrics['loss']:.4f}",
-                        "Acc": f"{metrics['accuracy']:.2f}%",
-                    }
-                )
+                    # Compute triplet loss
+                    loss = self.criterion(anchor_emb, positive_emb, negative_emb)
+
+                    self.val_metrics.update(
+                        loss.item(), anchor_emb, positive_emb, negative_emb
+                    )
+
+                    # Update progress bar
+                    metrics = self.val_metrics.get_metrics()
+                    postfix = {"Loss": f"{metrics['loss']:.4f}"}
+                    if "pos_dist" in metrics and "neg_dist" in metrics:
+                        postfix["PosDist"] = f"{metrics['pos_dist']:.3f}"
+                        postfix["NegDist"] = f"{metrics['neg_dist']:.3f}"
+                    postfix["Valid"] = f"{metrics['accuracy']:.1f}%"
+                    pbar.set_postfix(postfix)
+            else:
+                # Standard validation
+                for images, labels in pbar:
+                    images, labels = images.to(self.device), labels.to(self.device)
+                    outputs = self.model(images)
+                    loss = self.criterion(outputs, labels)
+
+                    self.val_metrics.update(loss.item(), outputs, labels)
+
+                    # Update progress bar
+                    metrics = self.val_metrics.get_metrics()
+                    pbar.set_postfix(
+                        {
+                            "Loss": f"{metrics['loss']:.4f}",
+                            "Acc": f"{metrics['accuracy']:.2f}%",
+                        }
+                    )
 
         elapsed_time = time.time() - start_time
         speed = num_batches / elapsed_time if elapsed_time > 0 else 0
@@ -325,16 +407,28 @@ class Trainer:
             )
 
             # Print epoch summary
-            print(
-                f"Epoch {epoch + 1}/{epochs} - "
-                f"Train Loss: {train_metrics['loss']:.4f}, "
-                f"Train Acc: {train_metrics['accuracy']:.2f}% - "
-                f"Val Loss: {val_metrics['loss']:.4f}, "
-                f"Val Acc: {val_metrics['accuracy']:.2f}% - "
-                f"LR: {current_lr:.2e} - "
-                f"Time: {epoch_time:.1f}s - "
-                f"Speed: {train_speed:.2f} it/s"
-            )
+            if self.paradigm == "triplet":
+                print(
+                    f"Epoch {epoch + 1}/{epochs} - "
+                    f"Train Loss: {train_metrics['loss']:.4f}, "
+                    f"Train Valid: {train_metrics['accuracy']:.2f}% - "
+                    f"Val Loss: {val_metrics['loss']:.4f}, "
+                    f"Val Valid: {val_metrics['accuracy']:.2f}% - "
+                    f"LR: {current_lr:.2e} - "
+                    f"Time: {epoch_time:.1f}s - "
+                    f"Speed: {train_speed:.2f} it/s"
+                )
+            else:
+                print(
+                    f"Epoch {epoch + 1}/{epochs} - "
+                    f"Train Loss: {train_metrics['loss']:.4f}, "
+                    f"Train Acc: {train_metrics['accuracy']:.2f}% - "
+                    f"Val Loss: {val_metrics['loss']:.4f}, "
+                    f"Val Acc: {val_metrics['accuracy']:.2f}% - "
+                    f"LR: {current_lr:.2e} - "
+                    f"Time: {epoch_time:.1f}s - "
+                    f"Speed: {train_speed:.2f} it/s"
+                )
 
             # Update learning rate scheduler if present
             if self.scheduler is not None:

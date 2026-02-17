@@ -1,13 +1,23 @@
 import torch.nn as nn
+from typing import Any
 
 try:
     from .base import BaseModel
+    from ..training.metrics import MetricsTracker
 except ImportError:
     from base import BaseModel
+    from training.metrics import MetricsTracker
+
 
 class Conv(nn.Module):
-    def __init__(self, ch_in: int, ch_out: int, kernel_size: tuple = (3, 3),
-                 act: nn.Module = None, bn: bool = True):
+    def __init__(
+        self,
+        ch_in: int,
+        ch_out: int,
+        kernel_size: tuple = (3, 3),
+        act: nn.Module = None,
+        bn: bool = True,
+    ):
         super().__init__()
         self.conv = nn.Conv2d(ch_in, ch_out, kernel_size=kernel_size)
         self.bn = nn.BatchNorm2d(ch_out) if bn else nn.Identity()
@@ -16,9 +26,16 @@ class Conv(nn.Module):
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
 
+
 class Linear(nn.Module):
-    def __init__(self, feat_in: int, feat_out: int, bias: bool = True,
-                 act: nn.Module = None, dropout: float = 0.5):
+    def __init__(
+        self,
+        feat_in: int,
+        feat_out: int,
+        bias: bool = True,
+        act: nn.Module = None,
+        dropout: float = 0.5,
+    ):
         super().__init__()
         self.linear = nn.Linear(feat_in, feat_out, bias)
         self.act = act if act else nn.SiLU()
@@ -27,10 +44,31 @@ class Linear(nn.Module):
     def forward(self, x):
         return self.drop(self.act(self.linear(x)))
 
+
 class MyNet(BaseModel):
     """Custom network similar to the original implementation."""
 
-    def __init__(self, num_classes: int = 10, input_channels: int = 1, input_size: tuple = (28, 28), **kwargs):
+    @property
+    def model_type(self) -> str:
+        return "classification"
+
+    @classmethod
+    def get_criterion(cls, **kwargs) -> nn.Module:
+        """Return CrossEntropyLoss for classification."""
+        return nn.CrossEntropyLoss()
+
+    @classmethod
+    def get_metrics_tracker(cls, **kwargs) -> Any:
+        """Return standard metrics tracker for classification."""
+        return MetricsTracker()
+
+    def __init__(
+        self,
+        num_classes: int = 10,
+        input_channels: int = 1,
+        input_size: tuple = (28, 28),
+        **kwargs,
+    ):
         super().__init__(num_classes, input_channels)
 
         self.channels = 16
@@ -41,7 +79,7 @@ class MyNet(BaseModel):
             nn.MaxPool2d(kernel_size=2, stride=2),
             Conv(self.channels, self.channels, (5, 1)),
             Conv(self.channels, self.channels, (1, 5)),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
 
         # Calculate the flattened feature size based on input size
@@ -63,7 +101,7 @@ class MyNet(BaseModel):
         self.classifier = nn.Sequential(
             Linear(self.feature_size, self.channels * 4 * 2, dropout=0.2),
             Linear(self.channels * 4 * 2, self.channels * 4, dropout=0.3),
-            nn.Linear(self.channels * 4, num_classes)
+            nn.Linear(self.channels * 4, num_classes),
         )
 
     def forward(self, x):

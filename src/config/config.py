@@ -1,5 +1,5 @@
 import argparse
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from pathlib import Path
 import yaml
 
@@ -9,6 +9,35 @@ try:
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
+
+
+def get_available_datasets() -> List[str]:
+    """Get list of available datasets from registry."""
+    try:
+        from ..datasets import DatasetRegistry
+
+        return DatasetRegistry.list_available()
+    except ImportError:
+        # Fallback to hardcoded list if import fails
+        return [
+            "mnist",
+            "cifar10",
+            "subset_631",
+            "subset_1000",
+            "triplet_mnist",
+            "balanced_triplet_mnist",
+        ]
+
+
+def get_available_models() -> List[str]:
+    """Get list of available models from registry."""
+    try:
+        from ..models import ModelRegistry
+
+        return ModelRegistry.list_available()
+    except ImportError:
+        # Fallback to hardcoded list if import fails
+        return ["lenet", "mynet", "bottleneck_vit", "fpn_vit", "siamese"]
 
 
 class Config:
@@ -103,13 +132,17 @@ def create_config_parser() -> argparse.ArgumentParser:
     """Create argument parser for configuration."""
     parser = argparse.ArgumentParser(description="Train a neural network")
 
+    # Get available choices dynamically
+    available_datasets = get_available_datasets()
+    available_models = get_available_models()
+
     # Dataset arguments
     parser.add_argument(
         "--dataset",
         type=str,
         default="mnist",
-        choices=["mnist", "cifar10", "subset_631", "subset_1000"],
-        help="Dataset to use",
+        choices=available_datasets,
+        help=f"Dataset to use. Available: {', '.join(available_datasets)}",
     )
     parser.add_argument(
         "--data-root", type=str, default="./data", help="Root directory for datasets"
@@ -120,8 +153,8 @@ def create_config_parser() -> argparse.ArgumentParser:
         "--model",
         type=str,
         default="mynet",
-        choices=["lenet", "mynet", "bottleneck_vit", "fpn_vit"],
-        help="Model architecture",
+        choices=available_models,
+        help=f"Model architecture. Available: {', '.join(available_models)}",
     )
     parser.add_argument("--num-classes", type=int, default=10, help="Number of classes")
 
@@ -185,6 +218,12 @@ def create_config_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.1,
         help="Factor for ReduceLROnPlateau",
+    )
+    parser.add_argument(
+        "--triplet-margin",
+        type=float,
+        default=1.0,
+        help="Margin for triplet loss (used by siamese models)",
     )
 
     # Checkpointing arguments

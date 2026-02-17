@@ -1,10 +1,13 @@
 import torch
 import torch.nn as nn
+from typing import Any
 
 try:
     from .base import BaseModel
+    from ..training.metrics import MetricsTracker
 except ImportError:
     from base import BaseModel
+    from training.metrics import MetricsTracker
 
 
 class PatchEmbed(nn.Module):
@@ -128,6 +131,20 @@ class BottleneckViT(BaseModel):
 
     Structure: Conv feature extraction -> Conv bottleneck -> ViT blocks -> 2x FC classification
     """
+
+    @property
+    def model_type(self) -> str:
+        return "classification"
+
+    @classmethod
+    def get_criterion(cls, **kwargs) -> nn.Module:
+        """Return CrossEntropyLoss for classification."""
+        return nn.CrossEntropyLoss()
+
+    @classmethod
+    def get_metrics_tracker(cls, **kwargs) -> Any:
+        """Return standard metrics tracker for classification."""
+        return MetricsTracker()
 
     def __init__(
         self,
@@ -255,6 +272,7 @@ class BottleneckViT(BaseModel):
 
         # Stage 5: Classification
         return self.head(x[:, 0])
+
 
 if __name__ == "__main__":
     from torchinfo import summary

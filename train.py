@@ -358,8 +358,11 @@ def main():
     logger.info(f"Model info: {info_str}")
     summary(model)
 
-    # Create criterion and optimizer
-    criterion = nn.CrossEntropyLoss()
+    # Create criterion using model's get_criterion method
+    model_class = ModelRegistry.get(config.model["name"])
+    criterion = model_class.get_criterion(**config.optimization)
+    logger.info(f"Using criterion: {criterion.__class__.__name__}")
+
     optimizer = create_optimizer(model, config)
     scheduler = create_scheduler(optimizer, config)
 

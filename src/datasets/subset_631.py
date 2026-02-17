@@ -10,6 +10,10 @@ from .base import BaseDataset
 class Subset631Dataset(BaseDataset):
     """Subset 631 Chinese character dataset."""
 
+    @property
+    def dataset_type(self) -> str:
+        return "standard"
+
     def __init__(
         self,
         root: str = "./data",

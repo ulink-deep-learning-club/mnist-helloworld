@@ -37,8 +37,10 @@ from .lenet import LeNet
 from .mynet import MyNet
 from .bottleneck_vit import BottleneckViT
 from .fpn_vit import FeaturePyramidViT
+from .siamese import SiameseNetwork
 
 ModelRegistry.register("lenet", LeNet)
 ModelRegistry.register("mynet", MyNet)
 ModelRegistry.register("bottleneck_vit", BottleneckViT)
 ModelRegistry.register("fpn_vit", FeaturePyramidViT)
+ModelRegistry.register("siamese", SiameseNetwork)

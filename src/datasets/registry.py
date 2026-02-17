@@ -5,6 +5,8 @@ from .mnist import MNISTDataset
 from .cifar import CIFARDataset
 from .subset_631 import Subset631Dataset
 from .subset_1000 import Subset1000Dataset
+from .triplet_mnist import TripletMNISTDataset, BalancedTripletMNISTDataset
+
 
 class DatasetRegistry:
     """Registry for dataset implementations."""
@@ -35,8 +37,11 @@ class DatasetRegistry:
         dataset_class = cls.get(name)
         return dataset_class(**kwargs)
 
+
 # Auto-register datasets
 DatasetRegistry.register("mnist", MNISTDataset)
 DatasetRegistry.register("cifar10", CIFARDataset)
 DatasetRegistry.register("subset_631", Subset631Dataset)
 DatasetRegistry.register("subset_1000", Subset1000Dataset)
+DatasetRegistry.register("triplet_mnist", TripletMNISTDataset)
+DatasetRegistry.register("balanced_triplet_mnist", BalancedTripletMNISTDataset)
