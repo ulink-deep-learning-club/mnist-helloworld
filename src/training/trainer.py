@@ -418,6 +418,9 @@ class Trainer:
                     self.dataset._train_dataset,  # type: ignore
                     **self._train_loader_kwargs,
                 )
+                print("Dataset transformation re-applied")
+            else:
+                print("Skipping reapplication of dataset transformations")
 
         training_time = time.time() - start_time
 

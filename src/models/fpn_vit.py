@@ -145,7 +145,9 @@ class FocusedLinearAttention(nn.Module):
 
         # 3. linear attention: first calc K^T @ V, complexity O(Nd^2)
         kv = torch.einsum("bhnd,bhne->bhde", k, v)  # (B, h, d, d)
-        z = 1.0 / (torch.einsum("bhnd,bhd->bhn", q, k.sum(dim=2)) + 1e-6)  # normalization factor
+        z = 1.0 / (
+            torch.einsum("bhnd,bhd->bhn", q, k.sum(dim=2)) + 1e-6
+        )  # normalization factor
         out = torch.einsum("bhnd,bhde,bhn->bhne", q, kv, z)  # (B, h, N, d)
 
         # 4. Local feature enhancement (compensate for lost local info in linear attention)
@@ -243,6 +245,91 @@ class SEBlock(nn.Module):
         return x * y.expand_as(x)
 
 
+class ConvBlock(nn.Module):
+    """Standard Conv Block (Conv + BatchNorm + Activation)."""
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=1,
+        stride=1,
+        padding=0,
+        groups=1,
+        act=True,
+    ):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            groups=groups,
+            bias=False,
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = nn.SiLU(inplace=True) if act else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+
+class Bottleneck(nn.Module):
+    """YOLOv5 Bottleneck block with optional shortcut."""
+
+    def __init__(
+        self, in_channels, out_channels, shortcut=True, groups=1, expansion=0.5
+    ):
+        super().__init__()
+        hidden_channels = int(out_channels * expansion)
+        self.cv1 = ConvBlock(in_channels, hidden_channels, 1, 1)
+        self.cv2 = ConvBlock(hidden_channels, out_channels, 3, 1, 1, groups=groups)
+        self.add = shortcut and in_channels == out_channels
+
+    def forward(self, x):
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
+class C3Module(nn.Module):
+    """YOLOv5 C3 Module (Cross Stage Partial Network).
+
+    Args:
+        in_channels: Input channel count
+        out_channels: Output channel count
+        num_bottlenecks: Number of bottleneck blocks
+        shortcut: Whether to use shortcut connections in bottlenecks
+        groups: Number of groups for grouped convolutions
+        expansion: Channel expansion factor for bottleneck hidden layers
+    """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        num_bottlenecks=3,
+        shortcut=True,
+        groups=1,
+        expansion=0.5,
+    ):
+        super().__init__()
+        hidden_channels = int(out_channels * expansion)
+        self.cv1 = ConvBlock(in_channels, hidden_channels, 1, 1)
+        self.cv2 = ConvBlock(in_channels, hidden_channels, 1, 1)
+        self.cv3 = ConvBlock(2 * hidden_channels, out_channels, 1, 1)
+        self.m = nn.Sequential(
+            *[
+                Bottleneck(
+                    hidden_channels, hidden_channels, shortcut, groups, expansion
+                )
+                for _ in range(num_bottlenecks)
+            ]
+        )
+
+    def forward(self, x):
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
+
+
 class VisionTransformer(nn.Module):
     """Vision Transformer module for processing patch embeddings."""
 
@@ -299,44 +386,43 @@ class VisionTransformer(nn.Module):
 
 
 class PyramidFeatureExtractor(nn.Module):
-    """Concatenation-based Pyramid Feature Extractor for better SE reweighting."""
+    """Concatenation-based Pyramid Feature Extractor with YOLOv5 C3 modules."""
 
     def __init__(
         self, input_channels=3, lateral_channels_list=[64, 128, 256], out_dim=256
     ):
         super().__init__()
-        self.layer1 = nn.Sequential(
-            nn.Conv2d(
-                input_channels,
-                lateral_channels_list[0],
-                kernel_size=3,
-                stride=2,
-                padding=1,
-            ),  # 64x64 -> 32x32
-            nn.BatchNorm2d(lateral_channels_list[0]),
-            nn.SiLU(inplace=True),
+        # Stage 1: Conv + C3 (downsample from 64x64 to 32x32)
+        self.stem = ConvBlock(
+            input_channels, lateral_channels_list[0], 3, 2, 1
+        )  # 64x64 -> 32x32
+        self.layer1 = C3Module(
+            lateral_channels_list[0],
+            lateral_channels_list[0],
+            num_bottlenecks=3,
+            shortcut=True,
         )
-        self.layer2 = nn.Sequential(
-            nn.Conv2d(
-                lateral_channels_list[0],
-                lateral_channels_list[1],
-                kernel_size=3,
-                stride=2,
-                padding=1,
-            ),  # 32x32 -> 16x16
-            nn.BatchNorm2d(lateral_channels_list[1]),
-            nn.SiLU(inplace=True),
+
+        # Stage 2: Conv + C3 (downsample from 32x32 to 16x16)
+        self.down2 = ConvBlock(
+            lateral_channels_list[0], lateral_channels_list[1], 3, 2, 1
+        )  # 32x32 -> 16x16
+        self.layer2 = C3Module(
+            lateral_channels_list[1],
+            lateral_channels_list[1],
+            num_bottlenecks=3,
+            shortcut=True,
         )
-        self.layer3 = nn.Sequential(
-            nn.Conv2d(
-                lateral_channels_list[1],
-                lateral_channels_list[2],
-                kernel_size=3,
-                stride=2,
-                padding=1,
-            ),  # 16x16 -> 8x8
-            nn.BatchNorm2d(lateral_channels_list[2]),
-            nn.SiLU(inplace=True),
+
+        # Stage 3: Conv + C3 (downsample from 16x16 to 8x8)
+        self.down3 = ConvBlock(
+            lateral_channels_list[1], lateral_channels_list[2], 3, 2, 1
+        )  # 16x16 -> 8x8
+        self.layer3 = C3Module(
+            lateral_channels_list[2],
+            lateral_channels_list[2],
+            num_bottlenecks=3,
+            shortcut=True,
         )
 
         self.lateral1 = nn.Sequential(
@@ -362,10 +448,13 @@ class PyramidFeatureExtractor(nn.Module):
         )
 
     def forward(self, x):
-        # Bottom-up pathway
+        # Bottom-up pathway with C3 modules
+        x = self.stem(x)  # 32x32, 64ch
         c1 = self.layer1(x)  # 32x32, 64ch
-        c2 = self.layer2(c1)  # 16x16, 128ch
-        c3 = self.layer3(c2)  # 8x8, 256ch
+        x = self.down2(c1)  # 16x16, 128ch
+        c2 = self.layer2(x)  # 16x16, 128ch
+        x = self.down3(c2)  # 8x8, 256ch
+        c3 = self.layer3(x)  # 8x8, 256ch
 
         # 1. Unify channels
         p1 = self.lateral1(c1)  # 32x32, out_dim
@@ -394,12 +483,12 @@ class FeaturePyramidViT(BaseModel):
         img_size=64,
         preprocess_channels=32,
         fpn_out_channels=128,
-        embed_dim=192,
+        embed_dim=128,
         patch_size=16,
         input_channels=3,
         num_classes=631,
         depth=6,
-        num_heads=12,
+        num_heads=8,
         mlp_ratio=4.0,
         drop_rate=0.2,
         **kwargs,
@@ -503,4 +592,4 @@ if __name__ == "__main__":
     from torchinfo import summary
 
     model = FeaturePyramidViT()
-    summary(model, input_size=(1, 3, 64, 64), depth=4)
+    summary(model, input_size=(1, 3, 64, 64))

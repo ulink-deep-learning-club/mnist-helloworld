@@ -14,7 +14,7 @@ class Subset631Dataset(BaseDataset):
         self,
         root: str = "./data",
         download: bool = True,
-        reapply_transforms: bool = False,
+        reapply_transforms: bool = True,
     ):
         super().__init__(root, download, reapply_transforms)
         self._train_indices = None
