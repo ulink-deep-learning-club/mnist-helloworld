@@ -209,3 +209,195 @@ class Subset1000Dataset(BaseDataset):
             self._train_dataset, _ = random_split(
                 full_dataset, [train_size, test_size], generator=generator
             )
+
+
+class TripletSubset1000Dataset(BaseDataset):
+    """Subset 1000 dataset for triplet learning."""
+
+    @property
+    def dataset_type(self) -> str:
+        return "triplet"
+
+    def __init__(
+        self,
+        root: str = "./data",
+        download: bool = True,
+        reapply_transforms: bool = False,
+        triplets_per_class: int = 100,
+    ):
+        super().__init__(root, download, reapply_transforms)
+        self.triplets_per_class = triplets_per_class
+
+    def get_train_transform(self) -> transforms.Compose:
+        return transforms.Compose(
+            [
+                AlbumentationsTransform(
+                    A.Compose(
+                        [
+                            A.Affine(
+                                scale=(0.8, 1.2),
+                                translate_percent=(-0.1, 0.1),
+                                rotate=(-15, 15),
+                                shear=(-10, 10),
+                                p=0.8,
+                            ),
+                            A.ElasticTransform(alpha=1, sigma=50, p=0.3),
+                            A.RandomGridShuffle(grid=(2, 2), p=0.2),
+                            A.CoarseDropout(
+                                num_holes_range=(1, 4),
+                                hole_height_range=(0.05, 0.1),
+                                hole_width_range=(0.05, 0.1),
+                                fill=0,
+                                p=0.3,
+                            ),
+                            A.RandomBrightnessContrast(
+                                brightness_limit=(-0.2, 0.2),
+                                contrast_limit=(-0.2, 0.2),
+                                p=0.5,
+                            ),
+                            A.GaussNoise(p=0.2),
+                            A.Resize(64, 64),
+                            A.Normalize(mean=0.5, std=0.5),
+                            ToTensorV2(),
+                        ]
+                    )
+                ),
+            ]
+        )
+
+    def get_test_transform(self) -> transforms.Compose:
+        return transforms.Compose(
+            [
+                AlbumentationsTransform(
+                    A.Compose(
+                        [
+                            A.Resize(64, 64),
+                            A.Normalize(mean=0.5, std=0.5),
+                            ToTensorV2(),
+                        ]
+                    )
+                ),
+            ]
+        )
+
+    def load_data(self):
+        """Load Subset 1000 dataset and generate triplets."""
+        data_path = os.path.join(self.root, "subset_1000")
+
+        # Load full dataset without transform first to organize by label
+        full_dataset = torchvision.datasets.ImageFolder(root=data_path, transform=None)
+
+        # Organize by label
+        data_by_label = {}
+        for idx, (img, label) in enumerate(full_dataset):
+            if label not in data_by_label:
+                data_by_label[label] = []
+            data_by_label[label].append(idx)
+
+        # Split into train/test (80/20)
+        train_indices = []
+        test_indices = []
+        for label, indices in data_by_label.items():
+            train_size = int(0.8 * len(indices))
+            train_indices.extend(indices[:train_size])
+            test_indices.extend(indices[train_size:])
+
+        # Create datasets with transforms
+        from .triplet_mnist import FixedTripletDataset
+
+        # Generate triplets for training
+        train_triplets = self._generate_triplets(
+            full_dataset, data_by_label, train_indices, self.triplets_per_class
+        )
+        test_triplets = self._generate_triplets(
+            full_dataset, data_by_label, test_indices, self.triplets_per_class // 10
+        )
+
+        self._train_dataset = FixedTripletDataset(
+            base_dataset=full_dataset,
+            triplets=train_triplets,
+            transform=self._train_transform,
+        )
+        self._test_dataset = FixedTripletDataset(
+            base_dataset=full_dataset,
+            triplets=test_triplets,
+            transform=self._test_transform,
+        )
+
+        # Store train indices for reload
+        self._train_indices_by_label = {
+            label: [idx for idx in indices if idx in train_indices]
+            for label, indices in data_by_label.items()
+        }
+
+    def _generate_triplets(
+        self, base_dataset, data_by_label, available_indices, per_class
+    ):
+        """Generate balanced triplets from available indices."""
+        import random
+
+        triplets = []
+
+        # Filter data_by_label to only include available indices
+        available_by_label = {}
+        for label, indices in data_by_label.items():
+            available = [idx for idx in indices if idx in available_indices]
+            if len(available) >= 2:  # Need at least 2 for anchor and positive
+                available_by_label[label] = available
+
+        labels = list(available_by_label.keys())
+
+        for anchor_label in labels:
+            anchor_indices = available_by_label[anchor_label]
+            for _ in range(per_class):
+                if len(anchor_indices) < 2:
+                    continue
+                # Sample anchor and positive
+                anchor_idx = random.choice(anchor_indices)
+                positive_idx = random.choice(anchor_indices)
+                while positive_idx == anchor_idx:
+                    positive_idx = random.choice(anchor_indices)
+
+                # Sample negative from different label
+                negative_label = random.choice([l for l in labels if l != anchor_label])
+                negative_idx = random.choice(available_by_label[negative_label])
+
+                triplets.append((anchor_idx, positive_idx, negative_idx, anchor_label))
+
+        return triplets
+
+    def _reload_train_data(self):
+        """Reload training data with current transforms."""
+        data_path = os.path.join(self.root, "subset_1000")
+        full_dataset = torchvision.datasets.ImageFolder(root=data_path, transform=None)
+
+        from .triplet_mnist import FixedTripletDataset
+
+        train_triplets = self._generate_triplets(
+            full_dataset,
+            self._train_indices_by_label,
+            [
+                idx
+                for indices in self._train_indices_by_label.values()
+                for idx in indices
+            ],
+            self.triplets_per_class,
+        )
+
+        self._train_dataset = FixedTripletDataset(
+            base_dataset=full_dataset,
+            triplets=train_triplets,
+            transform=self._train_transform,
+        )
+
+    @property
+    def num_classes(self) -> int:
+        return 1000
+
+    @property
+    def input_channels(self) -> int:
+        return 3
+
+    @property
+    def input_size(self) -> tuple:
+        return (64, 64)

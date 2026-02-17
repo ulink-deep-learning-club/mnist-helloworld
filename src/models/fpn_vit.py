@@ -605,6 +605,151 @@ class FeaturePyramidViT(BaseModel):
         return self.head(x[:, 0])
 
 
+class SiameseFPNViT(BaseModel):
+    """
+    Siamese FPN-ViT for metric learning with triplet loss.
+
+    Same architecture as FeaturePyramidViT but without classification head.
+    Returns L2-normalized embeddings for metric learning.
+    """
+
+    @property
+    def model_type(self) -> str:
+        return "siamese"
+
+    @classmethod
+    def get_criterion(cls, margin: float = 1.0, **kwargs) -> nn.Module:
+        """Return TripletLoss for siamese network."""
+        from .siamese import TripletLoss
+
+        return TripletLoss(margin=margin)
+
+    @classmethod
+    def get_metrics_tracker(cls, margin: float = 1.0, **kwargs) -> Any:
+        """Return triplet metrics tracker."""
+        from ..training.metrics import TripletMetricsTracker
+
+        return TripletMetricsTracker(margin=margin)
+
+    def __init__(
+        self,
+        img_size=64,
+        preprocess_channels=32,
+        fpn_out_channels=128,
+        embed_dim=128,
+        embedding_dim=256,  # Final embedding dimension (can differ from embed_dim)
+        patch_size=16,
+        input_channels=3,
+        num_classes=631,  # Kept for compatibility but not used
+        depth=6,
+        num_heads=8,
+        mlp_ratio=4.0,
+        drop_rate=0.2,
+        **kwargs,
+    ):
+        super().__init__(
+            num_classes=num_classes, input_channels=input_channels, **kwargs
+        )
+
+        self.embed_dim = embed_dim
+        self.embedding_dim = embedding_dim
+
+        self.image_preprocess = nn.Sequential(
+            nn.Conv2d(input_channels, preprocess_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(preprocess_channels),
+            nn.SiLU(inplace=True),
+        )
+
+        # Stage 1: Pyramid Feature Extractor & Channel Reduction
+        self.pyramid_extractor = PyramidFeatureExtractor(
+            input_channels=preprocess_channels,
+            lateral_channels_list=[64, 128, 256],
+            out_dim=fpn_out_channels,
+        )
+
+        # Stage 2: 256 patches for ViT
+        stride = (img_size // 4) // patch_size
+        num_patches = ((img_size // 4) // stride) ** 2
+        self.conv_bottleneck = nn.Sequential(
+            nn.Conv2d(
+                fpn_out_channels,
+                self.embed_dim,
+                kernel_size=3,
+                padding=1,
+                stride=stride,
+            ),
+            nn.BatchNorm2d(self.embed_dim),
+            nn.SiLU(inplace=True),
+        )
+
+        # Stage 3: Vision Transformer
+        self.vit = VisionTransformer(
+            embed_dim=self.embed_dim,
+            num_patches=num_patches,
+            depth=depth,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            drop_rate=drop_rate,
+            linear_attention=True,
+            linear_layer_limit=4,
+        )
+
+        # Stage 4: Projection head - decouples embedding_dim from embed_dim
+        self.projection = nn.Sequential(
+            nn.Linear(self.embed_dim, self.embedding_dim),
+            nn.BatchNorm1d(self.embedding_dim),
+            nn.SiLU(inplace=True),
+            nn.Dropout(drop_rate),
+        )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        self.apply(self._init_weights_layer)
+
+    def _init_weights_layer(self, m):
+        if isinstance(m, nn.Linear):
+            nn.init.trunc_normal_(m.weight, std=0.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x = self.image_preprocess(x)
+
+        # Stage 1: FPN Feature Extraction
+        x = self.pyramid_extractor(x)
+
+        # Stage 2: Conv Bottleneck
+        x = self.conv_bottleneck(x)
+
+        # Stage 3: Reshape to patches for ViT
+        x = x.flatten(2).transpose(1, 2)
+
+        # Stage 4: ViT Processing
+        x = self.vit(x)
+
+        # Stage 5: Projection head
+        # Extract CLS token and project to embedding dimension
+        cls_token = x[:, 0]
+        embedding = self.projection(cls_token)
+
+        # L2 normalize during training
+        if self.training:
+            embedding = F.normalize(embedding, p=2, dim=1)
+
+        return embedding
+
+
 if __name__ == "__main__":
     from torchinfo import summary
 
