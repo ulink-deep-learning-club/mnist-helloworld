@@ -305,12 +305,23 @@ class TripletSubset1000Dataset(BaseDataset):
         # Create datasets with transforms
         from .triplet_mnist import FixedTripletDataset
 
-        # Generate triplets for training
+        # Generate triplets for training with progress bar
+        from tqdm import tqdm
+
+        print(f"Generating triplets for {len(data_by_label)} classes...")
         train_triplets = self._generate_triplets(
-            full_dataset, data_by_label, train_indices, self.triplets_per_class
+            full_dataset,
+            data_by_label,
+            train_indices,
+            self.triplets_per_class,
+            desc="Train triplets",
         )
         test_triplets = self._generate_triplets(
-            full_dataset, data_by_label, test_indices, self.triplets_per_class // 10
+            full_dataset,
+            data_by_label,
+            test_indices,
+            self.triplets_per_class // 10,
+            desc="Test triplets",
         )
 
         self._train_dataset = FixedTripletDataset(
@@ -331,10 +342,11 @@ class TripletSubset1000Dataset(BaseDataset):
         }
 
     def _generate_triplets(
-        self, base_dataset, data_by_label, available_indices, per_class
+        self, base_dataset, data_by_label, available_indices, per_class, desc="Triplets"
     ):
         """Generate balanced triplets from available indices."""
         import random
+        from tqdm import tqdm
 
         triplets = []
 
@@ -349,23 +361,31 @@ class TripletSubset1000Dataset(BaseDataset):
                 available_by_label[label] = available
 
         labels = list(available_by_label.keys())
+        total_triplets = len(labels) * per_class
 
-        for anchor_label in labels:
-            anchor_indices = available_by_label[anchor_label]
-            for _ in range(per_class):
-                if len(anchor_indices) < 2:
-                    continue
-                # Sample anchor and positive
-                anchor_idx = random.choice(anchor_indices)
-                positive_idx = random.choice(anchor_indices)
-                while positive_idx == anchor_idx:
+        with tqdm(total=total_triplets, desc=desc, unit="triplet") as pbar:
+            for anchor_label in labels:
+                anchor_indices = available_by_label[anchor_label]
+                for _ in range(per_class):
+                    if len(anchor_indices) < 2:
+                        pbar.update(1)
+                        continue
+                    # Sample anchor and positive
+                    anchor_idx = random.choice(anchor_indices)
                     positive_idx = random.choice(anchor_indices)
+                    while positive_idx == anchor_idx:
+                        positive_idx = random.choice(anchor_indices)
 
-                # Sample negative from different label
-                negative_label = random.choice([l for l in labels if l != anchor_label])
-                negative_idx = random.choice(available_by_label[negative_label])
+                    # Sample negative from different label
+                    negative_label = random.choice(
+                        [l for l in labels if l != anchor_label]
+                    )
+                    negative_idx = random.choice(available_by_label[negative_label])
 
-                triplets.append((anchor_idx, positive_idx, negative_idx, anchor_label))
+                    triplets.append(
+                        (anchor_idx, positive_idx, negative_idx, anchor_label)
+                    )
+                    pbar.update(1)
 
         return triplets
 
@@ -376,6 +396,7 @@ class TripletSubset1000Dataset(BaseDataset):
 
         from .triplet_mnist import FixedTripletDataset
 
+        print("Regenerating training triplets...")
         train_triplets = self._generate_triplets(
             full_dataset,
             self._train_indices_by_label,
@@ -385,6 +406,7 @@ class TripletSubset1000Dataset(BaseDataset):
                 for idx in indices
             ],
             self.triplets_per_class,
+            desc="Regen triplets",
         )
 
         self._train_dataset = FixedTripletDataset(
