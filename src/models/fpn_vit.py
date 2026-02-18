@@ -695,11 +695,13 @@ class SiameseFPNViT(BaseModel):
         )
 
         # Stage 4: Projection head - decouples embedding_dim from embed_dim
+        # Deeper head without dropout for stable metric learning
         self.projection = nn.Sequential(
             nn.Linear(self.embed_dim, self.embedding_dim),
             nn.BatchNorm1d(self.embedding_dim),
             nn.SiLU(inplace=True),
-            nn.Dropout(drop_rate),
+            nn.Linear(self.embedding_dim, self.embedding_dim),
+            nn.BatchNorm1d(self.embedding_dim),
         )
 
         self._init_weights()
