@@ -343,8 +343,17 @@ class TripletSubset1000Dataset(BaseDataset):
         )
 
         # Store train indices for reload
+        # Convert to set for O(1) lookup - critical for performance
+        train_set = set(train_indices)
+        from tqdm import tqdm
+
+        print("Filtering train indices by label...")
         self._train_indices_by_label = {
-            label: [idx for idx in indices if idx in train_indices]
+            label: [
+                idx
+                for idx in tqdm(indices, desc=f"Label {label}", leave=False)
+                if idx in train_set
+            ]
             for label, indices in data_by_label.items()
         }
 
