@@ -332,12 +332,17 @@ def main():
         input_channels = dataset.input_channels
         input_size = dataset.input_size
 
-    model = ModelRegistry.create(
-        config.model["name"],
-        num_classes=num_classes,
-        input_channels=input_channels,
-        input_size=input_size,
-    ).to(device)
+    # Build model kwargs
+    model_kwargs = {
+        "num_classes": num_classes,
+        "input_channels": input_channels,
+        "input_size": input_size,
+    }
+    # Add embedding_dim if specified (for siamese models)
+    if "embedding_dim" in config.model:
+        model_kwargs["embedding_dim"] = config.model["embedding_dim"]
+
+    model = ModelRegistry.create(config.model["name"], **model_kwargs).to(device)
 
     # Get layer ID mapping for freeze functionality
     id_to_name = get_layer_id_mapping(model)

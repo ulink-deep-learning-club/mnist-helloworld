@@ -68,7 +68,11 @@ class Config:
         """Create configuration from command line arguments."""
         config_dict = {
             "dataset": {"name": args.dataset, "root": args.data_root, "download": True},
-            "model": {"name": args.model, "num_classes": args.num_classes},
+            "model": {
+                "name": args.model,
+                "num_classes": args.num_classes,
+                "embedding_dim": getattr(args, "embedding_dim", 256),
+            },
             "training": {
                 "epochs": args.epochs,
                 "batch_size": args.batch_size,
@@ -84,6 +88,8 @@ class Config:
                 "scheduler_eta_min": args.scheduler_eta_min,
                 "scheduler_patience": args.scheduler_patience,
                 "scheduler_factor": args.scheduler_factor,
+                "triplet_margin": getattr(args, "triplet_margin", 1.0),
+                "embedding_dim": getattr(args, "embedding_dim", 256),
             },
             "checkpointing": {
                 "checkpoint_dir": args.checkpoint_dir,
@@ -224,6 +230,12 @@ def create_config_parser() -> argparse.ArgumentParser:
         type=float,
         default=1.0,
         help="Margin for triplet loss (used by siamese models)",
+    )
+    parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=256,
+        help="Embedding dimension for siamese/metric learning models",
     )
 
     # Checkpointing arguments
