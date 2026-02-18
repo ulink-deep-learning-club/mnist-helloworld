@@ -444,6 +444,14 @@ def main():
                 f"Resumed from epoch {start_epoch}, best accuracy: {checkpoint_manager.best_accuracy:.2f}%"
             )
 
+            # Override learning rate from config/CLI (not from checkpoint)
+            new_lr = config.optimization.get("learning_rate", 1e-3)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = new_lr
+            logger.info(
+                f"Learning rate set to {new_lr:.2e} (from config/CLI, not checkpoint)"
+            )
+
             # Sync trainer's early stopping state with checkpoint
             trainer.best_accuracy = checkpoint_manager.best_accuracy
             trainer.best_epoch = checkpoint_info["epoch"]

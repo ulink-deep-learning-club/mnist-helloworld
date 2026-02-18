@@ -1,5 +1,7 @@
 import os
 import numpy as np
+import random
+from tqdm import tqdm
 import torch
 import torchvision
 from torch.utils.data import random_split, Subset
@@ -282,8 +284,6 @@ class TripletSubset1000Dataset(BaseDataset):
 
     def load_data(self):
         """Load Subset 1000 dataset and generate triplets."""
-        from tqdm import tqdm
-
         data_path = os.path.join(self.root, "subset_1000")
 
         # Load full dataset without transform first to organize by label
@@ -294,9 +294,7 @@ class TripletSubset1000Dataset(BaseDataset):
         print(f"Organizing {len(full_dataset)} samples by label...")
         data_by_label = {}
         # Use imgs attribute directly for faster access (avoids __getitem__ overhead)
-        for idx, (img_path, label) in enumerate(
-            tqdm(full_dataset.imgs, desc="Loading labels")
-        ):
+        for idx, (_, label) in enumerate(full_dataset.imgs):
             if label not in data_by_label:
                 data_by_label[label] = []
             data_by_label[label].append(idx)
@@ -311,9 +309,6 @@ class TripletSubset1000Dataset(BaseDataset):
 
         # Create datasets with transforms
         from .triplet_mnist import FixedTripletDataset
-
-        # Generate triplets for training with progress bar
-        from tqdm import tqdm
 
         print(f"Generating triplets for {len(data_by_label)} classes...")
         train_triplets = self._generate_triplets(
@@ -343,15 +338,13 @@ class TripletSubset1000Dataset(BaseDataset):
         )
 
         # Store train indices for reload
-        # Convert to set for O(1) lookup - critical for performance
         train_set = set(train_indices)
-        from tqdm import tqdm
 
         print("Filtering train indices by label...")
         self._train_indices_by_label = {
             label: [
                 idx
-                for idx in tqdm(indices, desc=f"Label {label}", leave=False)
+                for idx in indices
                 if idx in train_set
             ]
             for label, indices in data_by_label.items()
@@ -361,8 +354,6 @@ class TripletSubset1000Dataset(BaseDataset):
         self, base_dataset, data_by_label, available_indices, per_class, desc="Triplets"
     ):
         """Generate balanced triplets from available indices."""
-        import random
-        from tqdm import tqdm
 
         triplets = []
 
@@ -379,7 +370,7 @@ class TripletSubset1000Dataset(BaseDataset):
         labels = list(available_by_label.keys())
         total_triplets = len(labels) * per_class
 
-        with tqdm(total=total_triplets, desc=desc, unit="triplet") as pbar:
+        with tqdm(total=total_triplets, desc=desc, unit=" triplet") as pbar:
             for anchor_label in labels:
                 anchor_indices = available_by_label[anchor_label]
                 for _ in range(per_class):
@@ -394,7 +385,7 @@ class TripletSubset1000Dataset(BaseDataset):
 
                     # Sample negative from different label
                     negative_label = random.choice(
-                        [l for l in labels if l != anchor_label]
+                        [label for label in labels if label != anchor_label]
                     )
                     negative_idx = random.choice(available_by_label[negative_label])
 
