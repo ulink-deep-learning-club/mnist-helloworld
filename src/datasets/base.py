@@ -62,6 +62,32 @@ class BaseDataset(ABC):
         """Input image size (height, width)."""
         pass
 
+    def get_index_label_mapping(self) -> dict:
+        """Get mapping from class index to label.
+
+        Returns:
+            dict: Mapping from integer index to label string.
+        """
+        raise NotImplementedError("Subclasses must implement get_index_label_mapping()")
+
+    def export_index_label_json(self, output_path: str = "index_label_mapping.json"):
+        """Export index-label mapping to JSON file.
+
+        Args:
+            output_path: Path to save the JSON file.
+        """
+        import json
+
+        mapping = self.get_index_label_mapping()
+        # Convert int keys to strings for JSON
+        mapping_str_keys = {str(k): v for k, v in mapping.items()}
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(mapping_str_keys, f, ensure_ascii=False, indent=2)
+
+        print(f"Index-label mapping exported to {output_path}")
+        return output_path
+
     def get_dataloaders(
         self, batch_size: int = 64, num_workers: int = 4, shuffle_train: bool = True
     ) -> Tuple[DataLoader, DataLoader]:

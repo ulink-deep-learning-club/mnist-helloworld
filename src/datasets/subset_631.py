@@ -32,7 +32,7 @@ class Subset631Dataset(BaseDataset):
                 transforms.RandomHorizontalFlip(),
                 transforms.ColorJitter(brightness=0.2, contrast=0.2),
                 transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                transforms.Normalize((0.5,), (0.5,)),
             ]
         )
 
@@ -41,7 +41,7 @@ class Subset631Dataset(BaseDataset):
             [
                 transforms.Resize((64, 64)),
                 transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                transforms.Normalize((0.5,), (0.5,)),
             ]
         )
 
@@ -78,7 +78,39 @@ class Subset631Dataset(BaseDataset):
 
     @property
     def input_channels(self) -> int:
-        return 3
+        return 1
+
+    def get_index_label_mapping(self) -> dict:
+        """Get mapping from class index to character label.
+
+        Returns:
+            dict: Mapping from integer index to character string.
+        """
+        if self._train_dataset is None:
+            self.load_data()
+
+        # ImageFolder stores class_to_idx mapping
+        full_dataset = self._train_dataset.dataset
+        idx_to_class = {v: k for k, v in full_dataset.class_to_idx.items()}
+        return idx_to_class
+
+    def export_index_label_json(self, output_path: str = "index_label_mapping.json"):
+        """Export index-label mapping to JSON file.
+
+        Args:
+            output_path: Path to save the JSON file.
+        """
+        import json
+
+        mapping = self.get_index_label_mapping()
+        # Convert int keys to strings for JSON
+        mapping_str_keys = {str(k): v for k, v in mapping.items()}
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(mapping_str_keys, f, ensure_ascii=False, indent=2)
+
+        print(f"Index-label mapping exported to {output_path}")
+        return output_path
 
     @property
     def input_size(self) -> tuple:

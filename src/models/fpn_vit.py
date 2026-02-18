@@ -8,7 +8,6 @@ try:
     from ..training.metrics import MetricsTracker
 except ImportError:
     from base import BaseModel
-    from training.metrics import MetricsTracker
 
 
 class PatchEmbed(nn.Module):
