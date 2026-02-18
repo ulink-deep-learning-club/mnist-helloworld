@@ -282,14 +282,21 @@ class TripletSubset1000Dataset(BaseDataset):
 
     def load_data(self):
         """Load Subset 1000 dataset and generate triplets."""
+        from tqdm import tqdm
+
         data_path = os.path.join(self.root, "subset_1000")
 
         # Load full dataset without transform first to organize by label
+        print("Loading dataset from disk...")
         full_dataset = torchvision.datasets.ImageFolder(root=data_path, transform=None)
 
-        # Organize by label
+        # Organize by label with progress bar
+        print(f"Organizing {len(full_dataset)} samples by label...")
         data_by_label = {}
-        for idx, (img, label) in enumerate(full_dataset):
+        # Use imgs attribute directly for faster access (avoids __getitem__ overhead)
+        for idx, (img_path, label) in enumerate(
+            tqdm(full_dataset.imgs, desc="Loading labels")
+        ):
             if label not in data_by_label:
                 data_by_label[label] = []
             data_by_label[label].append(idx)
