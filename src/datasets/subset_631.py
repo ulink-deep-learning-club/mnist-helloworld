@@ -103,8 +103,29 @@ class Subset631Dataset(BaseDataset):
         import json
 
         mapping = self.get_index_label_mapping()
-        # Convert int keys to strings for JSON
-        mapping_str_keys = {str(k): v for k, v in mapping.items()}
+
+        def decode_label(label):
+            """Decode label to proper Chinese character."""
+            if isinstance(label, str):
+                # Check for #UXXXX format (common in some datasets)
+                if label.startswith("#U") or label.startswith("#u"):
+                    try:
+                        hex_code = label[2:]  # Remove #U or #u prefix
+                        return chr(int(hex_code, 16))
+                    except (ValueError, OverflowError):
+                        return label
+                # Check for Unicode escape sequences like \u4e14
+                if "\\u" in label or "\\U" in label:
+                    try:
+                        return label.encode("utf-8").decode("unicode-escape")
+                    except (UnicodeDecodeError, UnicodeEncodeError):
+                        return label
+                # Already a proper character
+                return label
+            return str(label)
+
+        # Convert int keys to strings and decode labels
+        mapping_str_keys = {str(k): decode_label(v) for k, v in mapping.items()}
 
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(mapping_str_keys, f, ensure_ascii=False, indent=2)
