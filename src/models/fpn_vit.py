@@ -391,7 +391,11 @@ class PyramidFeatureExtractor(nn.Module):
     """Concatenation-based Pyramid Feature Extractor with YOLOv5 C3 modules."""
 
     def __init__(
-        self, input_channels=3, lateral_channels_list=[64, 128, 256], out_dim=256
+        self,
+        input_channels=3,
+        lateral_channels_list=[64, 128, 256],
+        out_dim=256,
+        num_bottlenecks=3,
     ):
         super().__init__()
         # Stage 1: Conv + C3 (downsample from 64x64 to 32x32)
@@ -401,7 +405,7 @@ class PyramidFeatureExtractor(nn.Module):
         self.layer1 = C3Module(
             lateral_channels_list[0],
             lateral_channels_list[0],
-            num_bottlenecks=3,
+            num_bottlenecks=num_bottlenecks,
             shortcut=True,
         )
 
@@ -412,7 +416,7 @@ class PyramidFeatureExtractor(nn.Module):
         self.layer2 = C3Module(
             lateral_channels_list[1],
             lateral_channels_list[1],
-            num_bottlenecks=3,
+            num_bottlenecks=num_bottlenecks,
             shortcut=True,
         )
 
@@ -423,7 +427,7 @@ class PyramidFeatureExtractor(nn.Module):
         self.layer3 = C3Module(
             lateral_channels_list[2],
             lateral_channels_list[2],
-            num_bottlenecks=3,
+            num_bottlenecks=num_bottlenecks,
             shortcut=True,
         )
 
@@ -507,6 +511,8 @@ class FeaturePyramidViT(BaseModel):
         num_heads=8,
         mlp_ratio=4.0,
         drop_rate=0.2,
+        lateral_channels_list=None,
+        num_bottlenecks=3,
         **kwargs,
     ):
         super().__init__(
@@ -514,6 +520,9 @@ class FeaturePyramidViT(BaseModel):
         )
 
         self.embed_dim = embed_dim
+
+        if lateral_channels_list is None:
+            lateral_channels_list = [64, 128, 256]
 
         self.image_preprocess = nn.Sequential(
             nn.Conv2d(input_channels, preprocess_channels, kernel_size=3, padding=1),
@@ -524,8 +533,9 @@ class FeaturePyramidViT(BaseModel):
         # Stage 1: Pyramid Feature Extractor & Channel Reduction
         self.pyramid_extractor = PyramidFeatureExtractor(
             input_channels=preprocess_channels,
-            lateral_channels_list=[64, 128, 256],
+            lateral_channels_list=lateral_channels_list,
             out_dim=fpn_out_channels,
+            num_bottlenecks=num_bottlenecks,
         )
 
         # Stage 2: 256 patches for ViT
@@ -644,6 +654,8 @@ class SiameseFPNViT(BaseModel):
         num_heads=8,
         mlp_ratio=4.0,
         drop_rate=0.2,
+        lateral_channels_list=None,
+        num_bottlenecks=3,
         **kwargs,
     ):
         super().__init__(
@@ -652,6 +664,9 @@ class SiameseFPNViT(BaseModel):
 
         self.embed_dim = embed_dim
         self.embedding_dim = embedding_dim
+
+        if lateral_channels_list is None:
+            lateral_channels_list = [64, 128, 256]
 
         self.image_preprocess = nn.Sequential(
             nn.Conv2d(input_channels, preprocess_channels, kernel_size=3, padding=1),
@@ -662,8 +677,9 @@ class SiameseFPNViT(BaseModel):
         # Stage 1: Pyramid Feature Extractor & Channel Reduction
         self.pyramid_extractor = PyramidFeatureExtractor(
             input_channels=preprocess_channels,
-            lateral_channels_list=[64, 128, 256],
+            lateral_channels_list=lateral_channels_list,
             out_dim=fpn_out_channels,
+            num_bottlenecks=num_bottlenecks,
         )
 
         # Stage 2: 256 patches for ViT
@@ -751,8 +767,249 @@ class SiameseFPNViT(BaseModel):
         return embedding
 
 
+class ModelVariant:
+    """Model variant configurations for different parameter budgets."""
+
+    # Tiny: 0.5M - 1M params
+    TINY = {
+        "preprocess_channels": 16,
+        "fpn_out_channels": 48,
+        "embed_dim": 64,
+        "depth": 2,
+        "num_heads": 4,
+        "lateral_channels": [24, 48, 96],
+        "mlp_ratio": 2.0,
+        "num_bottlenecks": 2,
+    }
+
+    # Small: 1.7M - 2.5M params
+    SMALL = {
+        "preprocess_channels": 32,
+        "fpn_out_channels": 112,
+        "embed_dim": 128,
+        "depth": 5,
+        "num_heads": 8,
+        "lateral_channels": [56, 112, 224],
+        "mlp_ratio": 3.0,
+        "num_bottlenecks": 2,
+    }
+
+    # Base: ~2.5M params (current default)
+    BASE = {
+        "preprocess_channels": 32,
+        "fpn_out_channels": 112,
+        "embed_dim": 128,
+        "depth": 6,
+        "num_heads": 8,
+        "lateral_channels": [56, 112, 224],
+        "mlp_ratio": 3.0,
+        "num_bottlenecks": 3,
+    }
+
+    # Large: 3.5M+ params
+    LARGE = {
+        "preprocess_channels": 40,
+        "fpn_out_channels": 144,
+        "embed_dim": 160,
+        "depth": 8,
+        "num_heads": 8,
+        "lateral_channels": [72, 144, 288],
+        "mlp_ratio": 3.0,
+        "num_bottlenecks": 3,
+    }
+
+
+def create_fpn_vit(variant="base", num_classes=631, **kwargs):
+    """Factory function to create FPN-ViT with specified variant.
+
+    Args:
+        variant: 'tiny', 'small', 'base', or 'large'
+        num_classes: number of output classes
+        **kwargs: override any config parameters
+    """
+    config = getattr(ModelVariant, variant.upper(), ModelVariant.BASE).copy()
+    config.update(kwargs)
+
+    return FeaturePyramidViT(
+        preprocess_channels=config["preprocess_channels"],
+        fpn_out_channels=config["fpn_out_channels"],
+        embed_dim=config["embed_dim"],
+        depth=config["depth"],
+        num_heads=config["num_heads"],
+        mlp_ratio=config.get("mlp_ratio", 4.0),
+        lateral_channels_list=config.get("lateral_channels"),
+        num_bottlenecks=config.get("num_bottlenecks", 3),
+        num_classes=num_classes,
+    )
+
+
+def create_siamese_fpn_vit(variant="base", embedding_dim=256, **kwargs):
+    """Factory function to create Siamese FPN-ViT with specified variant.
+
+    Args:
+        variant: 'tiny', 'small', 'base', or 'large'
+        embedding_dim: final embedding dimension
+        **kwargs: override any config parameters
+    """
+    config = getattr(ModelVariant, variant.upper(), ModelVariant.BASE).copy()
+    config.update(kwargs)
+
+    return SiameseFPNViT(
+        preprocess_channels=config["preprocess_channels"],
+        fpn_out_channels=config["fpn_out_channels"],
+        embed_dim=config["embed_dim"],
+        embedding_dim=embedding_dim,
+        depth=config["depth"],
+        num_heads=config["num_heads"],
+        mlp_ratio=config.get("mlp_ratio", 4.0),
+        lateral_channels_list=config.get("lateral_channels"),
+        num_bottlenecks=config.get("num_bottlenecks", 3),
+    )
+
+
+# Model variant wrapper classes for registry
+class FeaturePyramidViTTiny(FeaturePyramidViT):
+    """FPN-ViT Tiny variant (~0.9M params)."""
+
+    def __init__(self, num_classes=631, **kwargs):
+        config = ModelVariant.TINY.copy()
+        config.update(kwargs)
+        super().__init__(
+            preprocess_channels=config["preprocess_channels"],
+            fpn_out_channels=config["fpn_out_channels"],
+            embed_dim=config["embed_dim"],
+            depth=config["depth"],
+            num_heads=config["num_heads"],
+            mlp_ratio=config.get("mlp_ratio", 4.0),
+            lateral_channels_list=config.get("lateral_channels"),
+            num_bottlenecks=config.get("num_bottlenecks", 3),
+            num_classes=num_classes,
+        )
+
+
+class FeaturePyramidViTSmall(FeaturePyramidViT):
+    """FPN-ViT Small variant (~1.7M params)."""
+
+    def __init__(self, num_classes=631, **kwargs):
+        config = ModelVariant.SMALL.copy()
+        config.update(kwargs)
+        super().__init__(
+            preprocess_channels=config["preprocess_channels"],
+            fpn_out_channels=config["fpn_out_channels"],
+            embed_dim=config["embed_dim"],
+            depth=config["depth"],
+            num_heads=config["num_heads"],
+            mlp_ratio=config.get("mlp_ratio", 4.0),
+            lateral_channels_list=config.get("lateral_channels"),
+            num_bottlenecks=config.get("num_bottlenecks", 3),
+            num_classes=num_classes,
+        )
+
+
+class FeaturePyramidViTLarge(FeaturePyramidViT):
+    """FPN-ViT Large variant (~3.8M params)."""
+
+    def __init__(self, num_classes=631, **kwargs):
+        config = ModelVariant.LARGE.copy()
+        config.update(kwargs)
+        super().__init__(
+            preprocess_channels=config["preprocess_channels"],
+            fpn_out_channels=config["fpn_out_channels"],
+            embed_dim=config["embed_dim"],
+            depth=config["depth"],
+            num_heads=config["num_heads"],
+            mlp_ratio=config.get("mlp_ratio", 4.0),
+            lateral_channels_list=config.get("lateral_channels"),
+            num_bottlenecks=config.get("num_bottlenecks", 3),
+            num_classes=num_classes,
+        )
+
+
+class SiameseFPNViTTiny(SiameseFPNViT):
+    """Siamese FPN-ViT Tiny variant (~1.0M params)."""
+
+    def __init__(self, embedding_dim=256, num_classes=631, **kwargs):
+        config = ModelVariant.TINY.copy()
+        config.update(kwargs)
+        super().__init__(
+            preprocess_channels=config["preprocess_channels"],
+            fpn_out_channels=config["fpn_out_channels"],
+            embed_dim=config["embed_dim"],
+            embedding_dim=embedding_dim,
+            depth=config["depth"],
+            num_heads=config["num_heads"],
+            mlp_ratio=config.get("mlp_ratio", 4.0),
+            lateral_channels_list=config.get("lateral_channels"),
+            num_bottlenecks=config.get("num_bottlenecks", 3),
+            num_classes=num_classes,
+        )
+
+
+class SiameseFPNViTSmall(SiameseFPNViT):
+    """Siamese FPN-ViT Small variant (~1.7M params)."""
+
+    def __init__(self, embedding_dim=256, num_classes=631, **kwargs):
+        config = ModelVariant.SMALL.copy()
+        config.update(kwargs)
+        super().__init__(
+            preprocess_channels=config["preprocess_channels"],
+            fpn_out_channels=config["fpn_out_channels"],
+            embed_dim=config["embed_dim"],
+            embedding_dim=embedding_dim,
+            depth=config["depth"],
+            num_heads=config["num_heads"],
+            mlp_ratio=config.get("mlp_ratio", 4.0),
+            lateral_channels_list=config.get("lateral_channels"),
+            num_bottlenecks=config.get("num_bottlenecks", 3),
+            num_classes=num_classes,
+        )
+
+
+class SiameseFPNViTLarge(SiameseFPNViT):
+    """Siamese FPN-ViT Large variant (~3.8M params)."""
+
+    def __init__(self, embedding_dim=256, num_classes=631, **kwargs):
+        config = ModelVariant.LARGE.copy()
+        config.update(kwargs)
+        super().__init__(
+            preprocess_channels=config["preprocess_channels"],
+            fpn_out_channels=config["fpn_out_channels"],
+            embed_dim=config["embed_dim"],
+            embedding_dim=embedding_dim,
+            depth=config["depth"],
+            num_heads=config["num_heads"],
+            mlp_ratio=config.get("mlp_ratio", 4.0),
+            lateral_channels_list=config.get("lateral_channels"),
+            num_bottlenecks=config.get("num_bottlenecks", 3),
+            num_classes=num_classes,
+        )
+
+
 if __name__ == "__main__":
     from torchinfo import summary
 
-    model = FeaturePyramidViT()
+    print("=" * 70)
+    print("FPN-ViT Classification Model Variants")
+    print("=" * 70)
+
+    variants = ["tiny", "small", "base", "large"]
+    for variant in variants:
+        model = create_fpn_vit(variant=variant)
+        info = summary(model, input_size=(1, 3, 64, 64), verbose=0)
+        print(f"{variant.upper():8} - Total params: {info.total_params:,}")
+
+    print("\n" + "=" * 70)
+    print("Siamese FPN-ViT Model Variants (embedding_dim=256)")
+    print("=" * 70)
+
+    for variant in variants:
+        model = create_siamese_fpn_vit(variant=variant, embedding_dim=256)
+        info = summary(model, input_size=(1, 3, 64, 64), verbose=0)
+        print(f"{variant.upper():8} - Total params: {info.total_params:,}")
+
+    # Detailed breakdown for base classification model
+    print("\n" + "=" * 70)
+    print("Detailed Breakdown (BASE Classification)")
+    print("=" * 70)
+    model = create_fpn_vit(variant="base")
     summary(model, input_size=(1, 3, 64, 64))

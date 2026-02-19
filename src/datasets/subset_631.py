@@ -1,18 +1,19 @@
 import os
-
+import torch
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import Subset, random_split
 
-from .base import BaseDataset
+from .base import ClassificationDataset
+from .utils import (
+    get_character_train_transform,
+    get_character_test_transform,
+    export_index_label_json,
+)
 
 
-class Subset631Dataset(BaseDataset):
+class Subset631Dataset(ClassificationDataset):
     """Subset 631 Chinese character dataset."""
-
-    @property
-    def dataset_type(self) -> str:
-        return "standard"
 
     def __init__(
         self,
@@ -25,25 +26,10 @@ class Subset631Dataset(BaseDataset):
         self._test_indices = None
 
     def get_train_transform(self) -> transforms.Compose:
-        return transforms.Compose(
-            [
-                transforms.Resize((64, 64)),
-                transforms.RandomRotation(15),
-                transforms.RandomHorizontalFlip(),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5,), (0.5,)),
-            ]
-        )
+        return get_character_train_transform(image_size=64)
 
     def get_test_transform(self) -> transforms.Compose:
-        return transforms.Compose(
-            [
-                transforms.Resize((64, 64)),
-                transforms.ToTensor(),
-                transforms.Normalize((0.5,), (0.5,)),
-            ]
-        )
+        return get_character_test_transform(image_size=64)
 
     def load_data(self):
         """Load Subset 631 dataset."""
@@ -100,38 +86,8 @@ class Subset631Dataset(BaseDataset):
         Args:
             output_path: Path to save the JSON file.
         """
-        import json
-
         mapping = self.get_index_label_mapping()
-
-        def decode_label(label):
-            """Decode label to proper Chinese character."""
-            if isinstance(label, str):
-                # Check for #UXXXX format (common in some datasets)
-                if label.startswith("#U") or label.startswith("#u"):
-                    try:
-                        hex_code = label[2:]  # Remove #U or #u prefix
-                        return chr(int(hex_code, 16))
-                    except (ValueError, OverflowError):
-                        return label
-                # Check for Unicode escape sequences like \u4e14
-                if "\\u" in label or "\\U" in label:
-                    try:
-                        return label.encode("utf-8").decode("unicode-escape")
-                    except (UnicodeDecodeError, UnicodeEncodeError):
-                        return label
-                # Already a proper character
-                return label
-            return str(label)
-
-        # Convert int keys to strings and decode labels
-        mapping_str_keys = {str(k): decode_label(v) for k, v in mapping.items()}
-
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(mapping_str_keys, f, ensure_ascii=False, indent=2)
-
-        print(f"Index-label mapping exported to {output_path}")
-        return output_path
+        return export_index_label_json(mapping, output_path)
 
     @property
     def input_size(self) -> tuple:
@@ -152,7 +108,6 @@ class Subset631Dataset(BaseDataset):
             # Fallback: create new split (shouldn't happen in normal usage)
             train_size = int(0.8 * len(full_dataset))
             test_size = len(full_dataset) - train_size
-            import torch
 
             generator = torch.Generator().manual_seed(42)
             self._train_dataset, _ = random_split(

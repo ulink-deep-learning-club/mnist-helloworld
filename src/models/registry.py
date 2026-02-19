@@ -36,12 +36,27 @@ class ModelRegistry:
 from .lenet import LeNet
 from .mynet import MyNet
 from .bottleneck_vit import BottleneckViT
-from .fpn_vit import FeaturePyramidViT, SiameseFPNViT
+from .fpn_vit import (
+    FeaturePyramidViT,
+    SiameseFPNViT,
+    FeaturePyramidViTTiny,
+    FeaturePyramidViTSmall,
+    FeaturePyramidViTLarge,
+    SiameseFPNViTTiny,
+    SiameseFPNViTSmall,
+    SiameseFPNViTLarge,
+)
 from .siamese import SiameseNetwork
 
 ModelRegistry.register("lenet", LeNet)
 ModelRegistry.register("mynet", MyNet)
 ModelRegistry.register("bottleneck_vit", BottleneckViT)
 ModelRegistry.register("fpn_vit", FeaturePyramidViT)
+ModelRegistry.register("fpn_vit_tiny", FeaturePyramidViTTiny)
+ModelRegistry.register("fpn_vit_small", FeaturePyramidViTSmall)
+ModelRegistry.register("fpn_vit_large", FeaturePyramidViTLarge)
 ModelRegistry.register("siamese", SiameseNetwork)
 ModelRegistry.register("siamese_fpn_vit", SiameseFPNViT)
+ModelRegistry.register("siamese_fpn_vit_tiny", SiameseFPNViTTiny)
+ModelRegistry.register("siamese_fpn_vit_small", SiameseFPNViTSmall)
+ModelRegistry.register("siamese_fpn_vit_large", SiameseFPNViTLarge)

@@ -281,6 +281,17 @@ def main():
         reapply_transforms=reapply_transforms,
     )
 
+    # Export class mappings to experiment directory
+    try:
+        mapping_path = dataset.export_index_label_json(
+            output_path=os.path.join(
+                experiment_manager.experiment_dir, "index_label_mapping.json"
+            )
+        )
+        logger.info(f"Exported class mappings to {mapping_path}")
+    except (NotImplementedError, AttributeError) as e:
+        logger.warning(f"Could not export class mappings: {e}")
+
     # Get data loaders
     train_loader, val_loader = dataset.get_dataloaders(
         batch_size=config.training["batch_size"],

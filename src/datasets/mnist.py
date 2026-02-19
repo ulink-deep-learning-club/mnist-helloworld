@@ -1,14 +1,10 @@
 import torchvision
 import torchvision.transforms as transforms
-from .base import BaseDataset
+from .base import ClassificationDataset
 
 
-class MNISTDataset(BaseDataset):
+class MNISTDataset(ClassificationDataset):
     """MNIST dataset implementation."""
-
-    @property
-    def dataset_type(self) -> str:
-        return "standard"
 
     def get_train_transform(self) -> transforms.Compose:
         return transforms.Compose(

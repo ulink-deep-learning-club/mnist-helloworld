@@ -198,6 +198,9 @@ def load_model_from_checkpoint(
     # Map class names to registry names (case-insensitive matching)
     class_name_to_registry = {
         "SiameseFPNViT": "siamese_fpn_vit",
+        "SiameseFPNViTTiny": "siamese_fpn_vit_tiny",
+        "SiameseFPNViTSmall": "siamese_fpn_vit_small",
+        "SiameseFPNViTLarge": "siamese_fpn_vit_large",
         "SiameseNetwork": "siamese",
     }
 
@@ -410,9 +413,7 @@ def search_command(args):
     # Apply transforms
     from torchvision import transforms
 
-
-
-        # Default transform
+    # Default transform
     default_transform = transforms.Compose(
         [
             transforms.Resize((64, 64)),
@@ -424,6 +425,7 @@ def search_command(args):
     image_tensor = (image_tensor - min_val) / (image_tensor.max() - min_val) * 255
     # save tensor to image
     from torchvision.utils import save_image
+
     save_image(image_tensor, "/Users/anson/Projects/mnist-helloworld/test_image.png")
     print("Image saved as test_image.png")
 

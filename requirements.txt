@@ -1,9 +1,0 @@
-torch
-torchvision
-tqdm
-pyyaml
-opencv-python-headless
-pillow
-matplotlib
-torchinfo
-qdrant-client

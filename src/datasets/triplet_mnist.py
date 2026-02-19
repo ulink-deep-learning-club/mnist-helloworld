@@ -4,10 +4,10 @@ import torch
 import random
 from typing import Tuple
 from torch.utils.data import Dataset
-from .base import BaseDataset
+from .base import TripletDatasetBase, BalancedTripletDataset, FixedTripletDataset
 
 
-class TripletMNISTDataset(BaseDataset):
+class TripletMNISTDataset(TripletDatasetBase):
     """
     MNIST dataset for triplet learning.
 
@@ -16,16 +16,12 @@ class TripletMNISTDataset(BaseDataset):
     Anchor and negative have different labels.
     """
 
-    @property
-    def dataset_type(self) -> str:
-        return "triplet"
-
     def __init__(
         self,
         root: str = "./data",
         download: bool = True,
         reapply_transforms: bool = False,
-        num_triplets: int = None,
+        num_triplets: int | None = None,
     ):
         super().__init__(root, download, reapply_transforms)
         self.num_triplets = num_triplets
@@ -95,6 +91,8 @@ class TripletMNISTDataset(BaseDataset):
 
     def _reload_train_data(self):
         """Reload training data with current transforms."""
+        assert self.num_triplets is not None, "Number of triplets must be specified"
+
         base_train = torchvision.datasets.MNIST(
             root=self.root,
             train=True,
@@ -132,7 +130,7 @@ class TripletDataset(Dataset):
         base_dataset,
         data_by_label: dict,
         transform=None,
-        num_triplets: int = None,
+        num_triplets: int | None = None,
     ):
         self.base_dataset = base_dataset
         self.data_by_label = data_by_label
@@ -170,7 +168,9 @@ class TripletDataset(Dataset):
             positive_idx = random.choice(anchor_indices)
 
         # Sample negative (different label)
-        negative_label = random.choice([l for l in self.labels if l != anchor_label])
+        negative_label = random.choice(
+            [label for label in self.labels if label != anchor_label]
+        )
         negative_idx = random.choice(self.data_by_label[negative_label])
 
         # Load images
@@ -187,26 +187,12 @@ class TripletDataset(Dataset):
         return anchor_img, positive_img, negative_img, anchor_label
 
 
-class BalancedTripletMNISTDataset(BaseDataset):
+class BalancedTripletMNISTDataset(BalancedTripletDataset):
     """
     Balanced MNIST triplet dataset with offline triplet generation.
 
     Pre-generates a fixed set of triplets to ensure balanced sampling.
     """
-
-    @property
-    def dataset_type(self) -> str:
-        return "triplet"
-
-    def __init__(
-        self,
-        root: str = "./data",
-        download: bool = True,
-        reapply_transforms: bool = False,
-        triplets_per_class: int = 1000,
-    ):
-        super().__init__(root, download, reapply_transforms)
-        self.triplets_per_class = triplets_per_class
 
     def get_train_transform(self) -> transforms.Compose:
         return transforms.Compose(
@@ -275,27 +261,6 @@ class BalancedTripletMNISTDataset(BaseDataset):
             transform=self._test_transform,
         )
 
-    def _generate_triplets(self, data_by_label: dict, per_class: int) -> list:
-        """Generate balanced triplets."""
-        triplets = []
-        labels = list(data_by_label.keys())
-
-        for anchor_label in labels:
-            for _ in range(per_class):
-                # Sample anchor and positive
-                anchor_idx = random.choice(data_by_label[anchor_label])
-                positive_idx = random.choice(data_by_label[anchor_label])
-                while positive_idx == anchor_idx:
-                    positive_idx = random.choice(data_by_label[anchor_label])
-
-                # Sample negative
-                negative_label = random.choice([l for l in labels if l != anchor_label])
-                negative_idx = random.choice(data_by_label[negative_label])
-
-                triplets.append((anchor_idx, positive_idx, negative_idx, anchor_label))
-
-        return triplets
-
     def _reload_train_data(self):
         """Reload with new transforms."""
         base_train = torchvision.datasets.MNIST(
@@ -330,29 +295,3 @@ class BalancedTripletMNISTDataset(BaseDataset):
     @property
     def input_size(self) -> tuple:
         return (28, 28)
-
-
-class FixedTripletDataset(Dataset):
-    """Dataset with pre-generated triplets."""
-
-    def __init__(self, base_dataset, triplets: list, transform=None):
-        self.base_dataset = base_dataset
-        self.triplets = triplets
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.triplets)
-
-    def __getitem__(self, idx):
-        anchor_idx, positive_idx, negative_idx, anchor_label = self.triplets[idx]
-
-        anchor_img, _ = self.base_dataset[anchor_idx]
-        positive_img, _ = self.base_dataset[positive_idx]
-        negative_img, _ = self.base_dataset[negative_idx]
-
-        if self.transform:
-            anchor_img = self.transform(anchor_img)
-            positive_img = self.transform(positive_img)
-            negative_img = self.transform(negative_img)
-
-        return anchor_img, positive_img, negative_img, anchor_label

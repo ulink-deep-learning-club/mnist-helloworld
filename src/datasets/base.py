@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple, Any, Optional
+from typing import Tuple, Optional
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 
@@ -95,6 +95,9 @@ class BaseDataset(ABC):
         if self._train_dataset is None or self._test_dataset is None:
             self.load_data()
 
+        assert self._train_dataset is not None, "Train dataset is not loaded"
+        assert self._test_dataset is not None, "Test dataset is not loaded"
+
         train_loader = DataLoader(
             self._train_dataset,
             batch_size=batch_size,
@@ -147,3 +150,141 @@ class BaseDataset(ABC):
         with the current self._train_transform.
         """
         pass
+
+
+class ClassificationDataset(BaseDataset):
+    """Base class for standard classification datasets.
+
+    Returns (image, label) tuples where label is the class index.
+    """
+
+    @property
+    def dataset_type(self) -> str:
+        return "standard"
+
+
+class TripletDatasetBase(BaseDataset):
+    """Base class for triplet-based datasets.
+
+    Returns (anchor, positive, negative, anchor_label) tuples.
+    """
+
+    @property
+    def dataset_type(self) -> str:
+        return "triplet"
+
+    def __init__(
+        self,
+        root: str = "./data",
+        download: bool = True,
+        reapply_transforms: bool = False,
+    ):
+        super().__init__(root, download, reapply_transforms)
+
+
+class BalancedTripletDataset(TripletDatasetBase):
+    """Base class for balanced triplet datasets.
+
+    Generates equal number of triplets per class for balanced training.
+    Child classes must implement load_data() and _reload_train_data().
+    """
+
+    def __init__(
+        self,
+        root: str = "./data",
+        download: bool = True,
+        reapply_transforms: bool = False,
+        triplets_per_class: int = 1000,
+    ):
+        super().__init__(root, download, reapply_transforms)
+        self.triplets_per_class = triplets_per_class
+
+    def _generate_triplets(
+        self,
+        data_by_label: dict,
+        per_class: int,
+        available_indices: list = None,
+        desc: str = "Triplets",
+    ) -> list:
+        """Generate balanced triplets with equal samples per class.
+
+        Args:
+            data_by_label: Dict mapping labels to lists of indices
+            per_class: Number of triplets to generate per class
+            available_indices: Optional list of available indices to filter by
+            desc: Description for progress bar (if tqdm available)
+
+        Returns:
+            List of (anchor_idx, positive_idx, negative_idx, anchor_label) tuples
+        """
+        import random
+
+        triplets = []
+
+        # Filter by available indices if provided
+        if available_indices is not None:
+            available_set = set(available_indices)
+            data_by_label = {
+                label: [idx for idx in indices if idx in available_set]
+                for label, indices in data_by_label.items()
+            }
+
+        labels = list(data_by_label.keys())
+        total_triplets = len(labels) * per_class
+
+        # Try to use tqdm for progress bar, fall back to simple loop
+        try:
+            from tqdm import tqdm
+
+            iterator = tqdm(range(total_triplets), desc=desc, unit=" triplet")
+        except ImportError:
+            iterator = range(total_triplets)
+
+        for anchor_label in labels:
+            anchor_indices = data_by_label[anchor_label]
+            if len(anchor_indices) < 2:
+                continue  # Skip if not enough samples for anchor + positive
+
+            for _ in range(per_class):
+                # Sample anchor and positive (same label, different samples)
+                anchor_idx = random.choice(anchor_indices)
+                positive_idx = random.choice(anchor_indices)
+                while positive_idx == anchor_idx:
+                    positive_idx = random.choice(anchor_indices)
+
+                # Sample negative (different label)
+                negative_label = random.choice([l for l in labels if l != anchor_label])
+                negative_indices = data_by_label[negative_label]
+                if not negative_indices:
+                    continue  # Skip if no negative samples available
+                negative_idx = random.choice(negative_indices)
+
+                triplets.append((anchor_idx, positive_idx, negative_idx, anchor_label))
+
+        return triplets
+
+
+class FixedTripletDataset(Dataset):
+    """Dataset with pre-generated triplets."""
+
+    def __init__(self, base_dataset, triplets: list, transform=None):
+        self.base_dataset = base_dataset
+        self.triplets = triplets
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.triplets)
+
+    def __getitem__(self, idx):
+        anchor_idx, positive_idx, negative_idx, anchor_label = self.triplets[idx]
+
+        anchor_img, _ = self.base_dataset[anchor_idx]
+        positive_img, _ = self.base_dataset[positive_idx]
+        negative_img, _ = self.base_dataset[negative_idx]
+
+        if self.transform:
+            anchor_img = self.transform(anchor_img)
+            positive_img = self.transform(positive_img)
+            negative_img = self.transform(negative_img)
+
+        return anchor_img, positive_img, negative_img, anchor_label
