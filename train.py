@@ -6,7 +6,6 @@ Supports multiple datasets and model architectures
 
 import os
 import torch
-import torch.nn as nn
 import torch.optim as optim
 from torchinfo import summary
 
