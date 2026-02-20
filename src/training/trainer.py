@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import time
@@ -27,6 +28,7 @@ class Trainer:
         scheduler: Optional[Any] = None,
         dataset: Optional[BaseDataset] = None,
         patience: int = 0,
+        use_amp: bool = False,
     ):
         self.model = model
         self.train_loader = train_loader
@@ -39,6 +41,8 @@ class Trainer:
         self.scheduler = scheduler
         self.dataset = dataset
         self.patience = patience
+        self.use_amp = use_amp and device.type == "cuda"
+        self.scaler = GradScaler(enabled=self.use_amp)
 
         # Detect training paradigm based on model and dataset types
         self.paradigm = self._detect_paradigm()
@@ -174,15 +178,15 @@ class Trainer:
 
                 self.optimizer.zero_grad()
 
-                # Get embeddings for all three
-                anchor_emb = self.model(anchor)
-                positive_emb = self.model(positive)
-                negative_emb = self.model(negative)
+                with autocast(enabled=self.use_amp):
+                    anchor_emb = self.model(anchor)
+                    positive_emb = self.model(positive)
+                    negative_emb = self.model(negative)
+                    loss = self.criterion(anchor_emb, positive_emb, negative_emb)
 
-                # Compute triplet loss
-                loss = self.criterion(anchor_emb, positive_emb, negative_emb)
-                loss.backward()
-                self.optimizer.step()
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
 
                 self.train_metrics.update(
                     loss.item(), anchor_emb, positive_emb, negative_emb
@@ -202,10 +206,14 @@ class Trainer:
                 images, labels = images.to(self.device), labels.to(self.device)
 
                 self.optimizer.zero_grad()
-                outputs = self.model(images)
-                loss = self.criterion(outputs, labels)
-                loss.backward()
-                self.optimizer.step()
+
+                with autocast(enabled=self.use_amp):
+                    outputs = self.model(images)
+                    loss = self.criterion(outputs, labels)
+
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
 
                 self.train_metrics.update(loss.item(), outputs, labels)
 
@@ -240,13 +248,11 @@ class Trainer:
                     positive = positive.to(self.device)
                     negative = negative.to(self.device)
 
-                    # Get embeddings
-                    anchor_emb = self.model(anchor)
-                    positive_emb = self.model(positive)
-                    negative_emb = self.model(negative)
-
-                    # Compute triplet loss
-                    loss = self.criterion(anchor_emb, positive_emb, negative_emb)
+                    with autocast(enabled=self.use_amp):
+                        anchor_emb = self.model(anchor)
+                        positive_emb = self.model(positive)
+                        negative_emb = self.model(negative)
+                        loss = self.criterion(anchor_emb, positive_emb, negative_emb)
 
                     self.val_metrics.update(
                         loss.item(), anchor_emb, positive_emb, negative_emb
@@ -264,8 +270,10 @@ class Trainer:
                 # Standard validation
                 for images, labels in pbar:
                     images, labels = images.to(self.device), labels.to(self.device)
-                    outputs = self.model(images)
-                    loss = self.criterion(outputs, labels)
+
+                    with autocast(enabled=self.use_amp):
+                        outputs = self.model(images)
+                        loss = self.criterion(outputs, labels)
 
                     self.val_metrics.update(loss.item(), outputs, labels)
 

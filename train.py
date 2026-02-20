@@ -384,6 +384,11 @@ def main():
     if scheduler:
         logger.info(f"Using scheduler: {config.optimization.get('scheduler', 'none')}")
 
+    if args.mixed_precision and device.type == "cuda":
+        logger.info("Mixed precision training enabled (FP16)")
+    elif args.mixed_precision and device.type != "cuda":
+        logger.warning("Mixed precision requested but not available on CPU, using FP32")
+
     # Create trainer first
     trainer = Trainer(
         model=model,
@@ -397,6 +402,7 @@ def main():
         dataset=dataset,
         patience=args.patience,
         scheduler=scheduler,
+        use_amp=args.mixed_precision,
     )
 
     # Load checkpoint weights if resuming or forking

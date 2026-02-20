@@ -296,6 +296,13 @@ def create_config_parser() -> argparse.ArgumentParser:
         help="Early stopping patience (0 to disable). Stops training if no improvement after N epochs.",
     )
 
+    # Mixed precision training
+    parser.add_argument(
+        "--mixed-precision",
+        action="store_true",
+        help="Enable mixed precision training (FP16) for faster training on compatible GPUs",
+    )
+
     return parser
 
 
