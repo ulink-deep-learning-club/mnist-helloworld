@@ -162,6 +162,13 @@ def create_config_parser() -> argparse.ArgumentParser:
         choices=available_models,
         help=f"Model architecture. Available: {', '.join(available_models)}",
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        choices=["cuda", "cpu", "mps"],
+        help="Device to use for training",
+    )
     parser.add_argument("--num-classes", type=int, default=10, help="Number of classes")
 
     # Training arguments

@@ -182,7 +182,24 @@ class Trainer:
                     anchor_emb = self.model(anchor)
                     positive_emb = self.model(positive)
                     negative_emb = self.model(negative)
-                    loss = self.criterion(anchor_emb, positive_emb, negative_emb)
+
+                    # Handle auxiliary loss (e.g., MoE balance loss)
+                    if self.model.has_aux_loss:
+                        if isinstance(anchor_emb, tuple):
+                            anchor_emb, aux_loss = anchor_emb
+                            positive_emb, _ = positive_emb
+                            negative_emb, _ = negative_emb
+                            aux_loss = aux_loss.mean() ** 2
+                            loss = (
+                                self.criterion(anchor_emb, positive_emb, negative_emb)
+                                + aux_loss
+                            )
+                        else:
+                            loss = self.criterion(
+                                anchor_emb, positive_emb, negative_emb
+                            )
+                    else:
+                        loss = self.criterion(anchor_emb, positive_emb, negative_emb)
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
@@ -209,12 +226,21 @@ class Trainer:
 
                 with autocast(enabled=self.use_amp):
                     outputs = self.model(images)
-                    loss = self.criterion(outputs, labels)
+                    main_loss = self.criterion(outputs, labels)
+
+                    # Handle auxiliary loss (e.g., MoE balance loss)
+                    if self.model.has_aux_loss and isinstance(outputs, tuple):
+                        outputs, aux_loss = outputs
+                        loss = torch.sqrt(main_loss ** 2 + aux_loss.mean() ** 2)
+                    else:
+                        loss = main_loss
 
                 self.scaler.scale(loss).backward()
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
+                if self.model.has_aux_loss and isinstance(outputs, tuple):
+                    outputs, _ = outputs
                 self.train_metrics.update(loss.item(), outputs, labels)
 
                 # Update progress bar

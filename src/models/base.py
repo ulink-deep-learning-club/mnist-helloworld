@@ -19,6 +19,11 @@ class BaseModel(nn.Module, ABC):
         """Model paradigm type. Must be one of MODEL_TYPES."""
         pass
 
+    @property
+    def has_aux_loss(self) -> bool:
+        """Whether the model has auxiliary loss (e.g., MoE balance loss)."""
+        return False
+
     @abstractmethod
     def forward(self, x):
         """Forward pass."""

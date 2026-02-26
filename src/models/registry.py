@@ -46,6 +46,16 @@ from .fpn_vit import (
     SiameseFPNViTSmall,
     SiameseFPNViTLarge,
 )
+from .fpn_moe_vit import (
+    FeaturePyramidMoEViT,
+    SiameseFPNMoEViT,
+    FeaturePyramidMoEViTTiny,
+    FeaturePyramidMoEViTSmall,
+    FeaturePyramidMoEViTLarge,
+    SiameseFPNMoEViTTiny,
+    SiameseFPNMoEViTSmall,
+    SiameseFPNMoEViTLarge,
+)
 from .siamese import SiameseNetwork
 from .alexnet import AlexNet
 
@@ -61,4 +71,12 @@ ModelRegistry.register("siamese_fpn_vit", SiameseFPNViT)
 ModelRegistry.register("siamese_fpn_vit_tiny", SiameseFPNViTTiny)
 ModelRegistry.register("siamese_fpn_vit_small", SiameseFPNViTSmall)
 ModelRegistry.register("siamese_fpn_vit_large", SiameseFPNViTLarge)
+ModelRegistry.register("fpn_moe_vit", FeaturePyramidMoEViT)
+ModelRegistry.register("fpn_moe_vit_tiny", FeaturePyramidMoEViTTiny)
+ModelRegistry.register("fpn_moe_vit_small", FeaturePyramidMoEViTSmall)
+ModelRegistry.register("fpn_moe_vit_large", FeaturePyramidMoEViTLarge)
+ModelRegistry.register("siamese_fpn_moe_vit", SiameseFPNMoEViT)
+ModelRegistry.register("siamese_fpn_moe_vit_tiny", SiameseFPNMoEViTTiny)
+ModelRegistry.register("siamese_fpn_moe_vit_small", SiameseFPNMoEViTSmall)
+ModelRegistry.register("siamese_fpn_moe_vit_large", SiameseFPNMoEViTLarge)
 ModelRegistry.register("alexnet", AlexNet)
