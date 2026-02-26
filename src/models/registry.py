@@ -47,6 +47,7 @@ from .fpn_vit import (
     SiameseFPNViTLarge,
 )
 from .siamese import SiameseNetwork
+from .alexnet import AlexNet
 
 ModelRegistry.register("lenet", LeNet)
 ModelRegistry.register("mynet", MyNet)
@@ -60,3 +61,4 @@ ModelRegistry.register("siamese_fpn_vit", SiameseFPNViT)
 ModelRegistry.register("siamese_fpn_vit_tiny", SiameseFPNViTTiny)
 ModelRegistry.register("siamese_fpn_vit_small", SiameseFPNViTSmall)
 ModelRegistry.register("siamese_fpn_vit_large", SiameseFPNViTLarge)
+ModelRegistry.register("alexnet", AlexNet)
