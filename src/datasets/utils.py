@@ -90,6 +90,7 @@ def get_character_train_transform(image_size: int = 64) -> transforms.Compose:
     """
     return transforms.Compose(
         [
+            transforms.Grayscale(num_output_channels=1),
             AlbumentationsTransform(
                 A.Compose(
                     [
@@ -157,6 +158,7 @@ def get_character_test_transform(image_size: int = 64) -> transforms.Compose:
     """
     return transforms.Compose(
         [
+            transforms.Grayscale(num_output_channels=1),
             AlbumentationsTransform(
                 A.Compose(
                     [
@@ -183,6 +185,7 @@ def get_simple_train_transform(image_size: int = 64) -> transforms.Compose:
     """
     return transforms.Compose(
         [
+            transforms.Grayscale(num_output_channels=1),
             transforms.Resize((image_size, image_size)),
             transforms.RandomRotation(15),
             transforms.RandomHorizontalFlip(),
@@ -204,6 +207,7 @@ def get_simple_test_transform(image_size: int = 64) -> transforms.Compose:
     """
     return transforms.Compose(
         [
+            transforms.Grayscale(num_output_channels=1),
             transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
             transforms.Normalize((0.5,), (0.5,)),

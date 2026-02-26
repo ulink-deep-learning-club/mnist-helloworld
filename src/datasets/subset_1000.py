@@ -93,6 +93,29 @@ class Subset1000Dataset(ClassificationDataset):
     def input_size(self) -> tuple:
         return (64, 64)
 
+    def _reload_train_data(self):
+        """Reload training data with current transforms."""
+        data_path = os.path.join(self.root, "subset_1000")
+
+        full_dataset = torchvision.datasets.ImageFolder(
+            root=data_path, transform=self._train_transform
+        )
+
+        # Use stored indices to maintain same train/test split
+        if self._train_indices is not None:
+            from torch.utils.data import Subset
+
+            self._train_dataset = Subset(full_dataset, self._train_indices)
+        else:
+            # Fallback: create new split (shouldn't happen in normal usage)
+            train_size = int(0.8 * len(full_dataset))
+            test_size = len(full_dataset) - train_size
+
+            generator = torch.Generator().manual_seed(42)
+            self._train_dataset, _ = random_split(
+                full_dataset, [train_size, test_size], generator=generator
+            )
+
 
 class TripletSubset1000Dataset(BalancedTripletDataset):
     """Subset 1000 dataset for triplet learning."""
