@@ -10,6 +10,7 @@ import os
 from typing import Optional, Dict, Any
 from .checkpoint import CheckpointManager
 from .experiment import ExperimentManager
+from .metrics import MetricsTracker, MoEMetricsTracker
 from ..datasets.base import BaseDataset
 from ..utils import setup_logger
 
@@ -51,6 +52,10 @@ class Trainer:
         # Detect training paradigm based on model and dataset types
         self.paradigm = self._detect_paradigm()
 
+        # Detect if model is MOE
+        self.is_moe = getattr(model, "arch_type", "dense") == "moe"
+        self.moe_num_experts = getattr(model, "moe_num_routed", 8)
+
         # Initialize metrics trackers using model's method
         model_class = model.__class__
         self.train_metrics = model_class.get_metrics_tracker(
@@ -59,6 +64,21 @@ class Trainer:
         self.val_metrics = model_class.get_metrics_tracker(
             **getattr(criterion, "__dict__", {})
         )
+
+        # Initialize MOE metrics tracker if model is MOE
+        if self.is_moe:
+            self.train_moe_metrics = MoEMetricsTracker(
+                num_experts=self.moe_num_experts,
+                save_path=os.path.join(
+                    experiment_manager.experiment_dir, "train_moe_metrics.json"
+                ),
+            )
+            self.val_moe_metrics = MoEMetricsTracker(
+                num_experts=self.moe_num_experts,
+                save_path=os.path.join(
+                    experiment_manager.experiment_dir, "val_moe_metrics.json"
+                ),
+            )
 
         # Training history for plotting
         self.history = {
@@ -168,6 +188,8 @@ class Trainer:
         """Train for one epoch. Returns metrics and speed (it/s)."""
         self.model.train()
         self.train_metrics.reset()
+        if self.is_moe:
+            self.train_moe_metrics.reset()
 
         pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1} - Training")
         start_time = time.time()
@@ -188,15 +210,26 @@ class Trainer:
                     negative_emb = self.model(negative)
 
                     # Handle auxiliary loss (e.g., MoE balance loss)
+                    aux_loss_val = None
+                    expert_freq = None
+                    expert_prob = None
                     if self.model.has_aux_loss:
                         if isinstance(anchor_emb, tuple):
-                            anchor_emb, aux_loss = anchor_emb
-                            positive_emb, _ = positive_emb
-                            negative_emb, _ = negative_emb
-                            aux_loss = aux_loss.mean() ** 2
+                            if len(anchor_emb) == 4:
+                                # Model returns (embedding, aux_loss, expert_freq, expert_prob)
+                                anchor_emb, aux_loss_val, expert_freq, expert_prob = (
+                                    anchor_emb
+                                )
+                                positive_emb, _, _, _ = positive_emb
+                                negative_emb, _, _, _ = negative_emb
+                            else:
+                                anchor_emb, aux_loss_val = anchor_emb
+                                positive_emb, _ = positive_emb
+                                negative_emb, _ = negative_emb
+                            aux_loss_val = aux_loss_val.mean() ** 2
                             loss = (
                                 self.criterion(anchor_emb, positive_emb, negative_emb)
-                                + aux_loss
+                                + aux_loss_val
                             )
                         else:
                             loss = self.criterion(
@@ -212,6 +245,17 @@ class Trainer:
                 self.train_metrics.update(
                     loss.item(), anchor_emb, positive_emb, negative_emb
                 )
+
+                # Update MOE metrics if applicable
+                if self.is_moe and hasattr(self, "train_moe_metrics"):
+                    if expert_freq is not None:
+                        self.train_moe_metrics.update(
+                            aux_loss_val.item()
+                            if isinstance(aux_loss_val, torch.Tensor)
+                            else aux_loss_val,
+                            expert_freq,
+                            expert_prob,
+                        )
 
                 # Update progress bar
                 metrics = self.train_metrics.get_metrics()
@@ -230,11 +274,21 @@ class Trainer:
 
                 with autocast("cuda", enabled=self.use_amp):
                     outputs = self.model(images)
-                    main_loss = self.criterion(outputs, labels)
 
                     # Handle auxiliary loss (e.g., MoE balance loss)
+                    aux_loss = None
+                    expert_freq = None
+                    expert_prob = None
                     if self.model.has_aux_loss and isinstance(outputs, tuple):
-                        outputs, aux_loss = outputs
+                        if len(outputs) == 4:
+                            # Classification: (output, aux_loss, expert_freq, expert_prob)
+                            outputs, aux_loss, expert_freq, expert_prob = outputs
+                        else:
+                            outputs, aux_loss = outputs
+
+                    main_loss = self.criterion(outputs, labels)
+
+                    if aux_loss is not None:
                         loss = torch.sqrt(main_loss**2 + aux_loss.mean() ** 2)
                     else:
                         loss = main_loss
@@ -243,8 +297,18 @@ class Trainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
 
+                # Update MOE metrics if applicable
+                if self.is_moe and hasattr(self, "train_moe_metrics"):
+                    if expert_freq is not None:
+                        self.train_moe_metrics.update(
+                            aux_loss.item() if aux_loss is not None else 0.0,
+                            expert_freq,
+                            expert_prob,
+                        )
+
                 if self.model.has_aux_loss and isinstance(outputs, tuple):
-                    outputs, _ = outputs
+                    if len(outputs) == 2:
+                        outputs, _ = outputs
                 self.train_metrics.update(loss.item(), outputs, labels)
 
                 # Update progress bar
@@ -265,6 +329,8 @@ class Trainer:
         """Validate the model. Returns metrics and speed (it/s)."""
         self.model.eval()
         self.val_metrics.reset()
+        if self.is_moe:
+            self.val_moe_metrics.reset()
 
         pbar = tqdm(self.val_loader, desc="Validating")
         start_time = time.time()
@@ -282,6 +348,24 @@ class Trainer:
                         anchor_emb = self.model(anchor)
                         positive_emb = self.model(positive)
                         negative_emb = self.model(negative)
+
+                        # Handle tuple outputs for MOE models
+                        expert_freq = None
+                        expert_prob = None
+                        if isinstance(anchor_emb, tuple):
+                            if len(anchor_emb) == 4:
+                                anchor_emb, _, expert_freq, expert_prob = anchor_emb
+                                positive_emb, _, _, _ = positive_emb
+                                negative_emb, _, _, _ = negative_emb
+                            else:
+                                anchor_emb, _ = anchor_emb
+                                positive_emb, _ = positive_emb
+                                negative_emb, _ = negative_emb
+                            if self.is_moe and expert_freq is not None:
+                                self.val_moe_metrics.update(
+                                    0.0, expert_freq, expert_prob
+                                )
+
                         loss = self.criterion(anchor_emb, positive_emb, negative_emb)
 
                     self.val_metrics.update(
@@ -303,6 +387,20 @@ class Trainer:
 
                     with autocast("cuda", enabled=self.use_amp):
                         outputs = self.model(images)
+
+                        # Handle tuple outputs for MOE models
+                        expert_freq = None
+                        expert_prob = None
+                        if isinstance(outputs, tuple) and self.is_moe:
+                            if len(outputs) == 4:
+                                outputs, _, expert_freq, expert_prob = outputs
+                                if expert_freq is not None:
+                                    self.val_moe_metrics.update(
+                                        0.0, expert_freq, expert_prob
+                                    )
+                            else:
+                                outputs, _ = outputs
+
                         loss = self.criterion(outputs, labels)
 
                     self.val_metrics.update(loss.item(), outputs, labels)
@@ -467,6 +565,13 @@ class Trainer:
                     f"Time: {epoch_time:.1f}s - "
                     f"Speed: {train_speed:.2f} it/s"
                 )
+
+            # Save MOE metrics to JSON
+            if self.is_moe:
+                self.train_moe_metrics.save_epoch(epoch + 1)
+                self.val_moe_metrics.save_epoch(epoch + 1)
+                self.train_moe_metrics.save_to_json()
+                self.val_moe_metrics.save_to_json()
 
             # Update learning rate scheduler if present
             if self.scheduler is not None:

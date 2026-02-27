@@ -1,6 +1,8 @@
 import torch
 from typing import Dict, List
 import time
+import json
+import os
 
 
 class MetricsTracker:
@@ -127,3 +129,105 @@ class MetricsTrackerFactory:
             return TripletMetricsTracker(margin=margin)
         else:
             raise ValueError(f"Unknown tracker type: {tracker_type}")
+
+
+class MoEMetricsTracker:
+    """Track MoE-specific metrics: balance loss, expert_freq, expert_prob."""
+
+    def __init__(self, num_experts: int = 8, save_path: str = None, **kwargs):
+        self.num_experts = num_experts
+        self.save_path = save_path
+        self.reset()
+
+    def reset(self):
+        """Reset all metrics."""
+        self.balance_losses: List[float] = []
+        self.expert_freq_records: List[List[float]] = []
+        self.expert_prob_records: List[List[float]] = []
+        self.epoch_records: List[Dict] = []
+        self.current_epoch = 0
+
+    def update(
+        self,
+        balance_loss: float,
+        expert_freq: torch.Tensor = None,
+        expert_prob: torch.Tensor = None,
+    ):
+        """Update metrics with batch results."""
+        self.balance_losses.append(balance_loss)
+
+        if expert_freq is not None:
+            freq = expert_freq.detach().cpu().numpy().tolist()
+            self.expert_freq_records.append(freq)
+
+        if expert_prob is not None:
+            prob = expert_prob.detach().cpu().numpy().tolist()
+            self.expert_prob_records.append(prob)
+
+    def get_average_balance_loss(self) -> float:
+        """Get average balance loss."""
+        if not self.balance_losses:
+            return 0.0
+        return sum(self.balance_losses) / len(self.balance_losses)
+
+    def get_average_expert_freq(self) -> List[float]:
+        """Get average expert frequency across all batches."""
+        if not self.expert_freq_records:
+            return [0.0] * self.num_experts
+        num_batches = len(self.expert_freq_records)
+        avg_freq = [
+            sum(batch[i] for batch in self.expert_freq_records) / num_batches
+            for i in range(self.num_experts)
+        ]
+        return avg_freq
+
+    def get_average_expert_prob(self) -> List[float]:
+        """Get average expert probability across all batches."""
+        if not self.expert_prob_records:
+            return [0.0] * self.num_experts
+        num_batches = len(self.expert_prob_records)
+        avg_prob = [
+            sum(batch[i] for batch in self.expert_prob_records) / num_batches
+            for i in range(self.num_experts)
+        ]
+        return avg_prob
+
+    def get_metrics(self) -> Dict[str, float]:
+        """Get all MoE metrics as dictionary."""
+        metrics = {
+            "balance_loss": self.get_average_balance_loss(),
+        }
+        metrics[f"expert_freq_avg"] = self.get_average_expert_freq()
+        metrics[f"expert_prob_avg"] = self.get_average_expert_prob()
+        return metrics
+
+    def get_last_expert_stats(self) -> Dict:
+        """Get expert stats from last batch."""
+        return {
+            "expert_freq": self.expert_freq_records[-1]
+            if self.expert_freq_records
+            else [],
+            "expert_prob": self.expert_prob_records[-1]
+            if self.expert_prob_records
+            else [],
+        }
+
+    def save_epoch(self, epoch: int):
+        """Save epoch metrics to records."""
+        record = {
+            "epoch": epoch,
+            "balance_loss": self.get_average_balance_loss(),
+            "expert_freq_avg": self.get_average_expert_freq(),
+            "expert_prob_avg": self.get_average_expert_prob(),
+        }
+        self.epoch_records.append(record)
+        self.current_epoch = epoch
+
+    def save_to_json(self, filepath: str = None):
+        """Save all epoch records to JSON file."""
+        path = filepath or self.save_path
+        if not path:
+            return
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(self.epoch_records, f, indent=2)

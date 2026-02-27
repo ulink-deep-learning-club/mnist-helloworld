@@ -109,7 +109,7 @@ class MoEMLP(nn.Module):
 
         balance_loss = self.balance_factor * (expert_freq * expert_prob).sum()
 
-        return out, balance_loss
+        return out, balance_loss, expert_freq, expert_prob
 
 
 class PatchEmbed(nn.Module):
@@ -283,7 +283,6 @@ class Block(nn.Module):
         drop=0.0,
         attn_drop=0.0,
         linear_attention=False,
-        use_moe=False,
         moe_num_shared=1,
         moe_num_routed=64,
         moe_num_activated_routed=6,
@@ -311,32 +310,22 @@ class Block(nn.Module):
         )
         self.norm2 = nn.LayerNorm(dim)
 
-        if use_moe:
-            self.mlp = MoEMLP(
-                dim=dim,
-                num_shared=moe_num_shared,
-                num_routed=moe_num_routed,
-                num_activated_routed=moe_num_activated_routed,
-                expert_ratio=moe_expert_ratio,
-                act_layer=nn.GELU,
-                drop=drop,
-                balance_factor=moe_balance_factor,
-            )
-        else:
-            mlp_hidden_dim = int(dim * mlp_ratio)
-            self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, drop=drop)
-
-        self.use_moe = use_moe
+        self.mlp = MoEMLP(
+            dim=dim,
+            num_shared=moe_num_shared,
+            num_routed=moe_num_routed,
+            num_activated_routed=moe_num_activated_routed,
+            expert_ratio=moe_expert_ratio,
+            act_layer=nn.GELU,
+            drop=drop,
+            balance_factor=moe_balance_factor,
+        )
 
     def forward(self, x):
         x = x + self.attn(self.norm1(x))
-        if self.use_moe:
-            mlp_out, aux_loss = self.mlp(self.norm2(x))
-            x = x + mlp_out
-            return x, aux_loss
-        else:
-            x = x + self.mlp(self.norm2(x))
-            return x
+        mlp_out, aux_loss, expert_freq, expert_prob = self.mlp(self.norm2(x))
+        x = x + mlp_out
+        return x, aux_loss, expert_freq, expert_prob
 
 
 class SEBlock(nn.Module):
@@ -448,7 +437,6 @@ class VisionTransformer(nn.Module):
         drop_rate=0.2,
         linear_attention=False,
         linear_layer_limit=4,
-        use_moe=False,
         moe_num_shared=1,
         moe_num_routed=64,
         moe_num_activated_routed=6,
@@ -472,7 +460,6 @@ class VisionTransformer(nn.Module):
                     linear_attention=linear_attention
                     if i < linear_layer_limit
                     else False,
-                    use_moe=use_moe,
                     moe_num_shared=moe_num_shared,
                     moe_num_routed=moe_num_routed,
                     moe_num_activated_routed=moe_num_activated_routed,
@@ -484,7 +471,6 @@ class VisionTransformer(nn.Module):
         )
 
         self.norm = nn.LayerNorm(embed_dim)
-        self.use_moe = use_moe
 
         self._init_weights()
 
@@ -500,18 +486,21 @@ class VisionTransformer(nn.Module):
         x = self.pos_drop(x)
 
         aux_loss = 0
+        expert_freq = None
+        expert_prob = None
         for block in self.blocks:
-            if self.use_moe:
-                x, block_loss = block(x)
-                aux_loss = aux_loss + block_loss
+            x, block_loss, block_freq, block_prob = block(x)
+            aux_loss = aux_loss + block_loss
+            if expert_freq is None:
+                expert_freq = block_freq
+                expert_prob = block_prob
             else:
-                x = block(x)
+                expert_freq = expert_freq + block_freq
+                expert_prob = expert_prob + block_prob
 
         x = self.norm(x)
 
-        if self.use_moe:
-            return x, aux_loss
-        return x
+        return x, aux_loss, expert_freq, expert_prob
 
 
 class MultiScaleVisionTransformer(nn.Module):
@@ -528,7 +517,6 @@ class MultiScaleVisionTransformer(nn.Module):
         drop_rate=0.2,
         linear_attention=False,
         linear_layer_limit=4,
-        use_moe=False,
         moe_num_shared=1,
         moe_num_routed=64,
         moe_num_activated_routed=6,
@@ -564,7 +552,6 @@ class MultiScaleVisionTransformer(nn.Module):
                     linear_attention=linear_attention
                     if i < linear_layer_limit
                     else False,
-                    use_moe=use_moe,
                     moe_num_shared=moe_num_shared,
                     moe_num_routed=moe_num_routed,
                     moe_num_activated_routed=moe_num_activated_routed,
@@ -576,7 +563,6 @@ class MultiScaleVisionTransformer(nn.Module):
         )
 
         self.norm = nn.LayerNorm(embed_dim)
-        self.use_moe = use_moe
 
         self._init_weights()
 
@@ -606,18 +592,21 @@ class MultiScaleVisionTransformer(nn.Module):
         x = self.pos_drop(x)
 
         aux_loss = 0
+        expert_freq = None
+        expert_prob = None
         for block in self.blocks:
-            if self.use_moe:
-                x, block_loss = block(x)
-                aux_loss = aux_loss + block_loss
+            x, block_loss, block_freq, block_prob = block(x)
+            aux_loss = aux_loss + block_loss
+            if expert_freq is None:
+                expert_freq = block_freq
+                expert_prob = block_prob
             else:
-                x = block(x)
+                expert_freq = expert_freq + block_freq
+                expert_prob = expert_prob + block_prob
 
         x = self.norm(x)
 
-        if self.use_moe:
-            return x, aux_loss
-        return x
+        return x, aux_loss, expert_freq, expert_prob
 
 
 class PyramidFeatureExtractor(nn.Module):
@@ -721,7 +710,11 @@ class FeaturePyramidMoEViT(BaseModel):
 
     @property
     def has_aux_loss(self) -> bool:
-        return self.use_moe
+        return True
+
+    @property
+    def arch_type(self) -> str:
+        return "moe"
 
     @classmethod
     def get_criterion(cls, **kwargs) -> nn.Module:
@@ -749,7 +742,6 @@ class FeaturePyramidMoEViT(BaseModel):
         fpn_mode="multiscale",
         linear_attention=True,
         linear_layer_limit=4,
-        use_moe=False,
         moe_num_shared=1,
         moe_num_routed=64,
         moe_num_activated_routed=6,
@@ -763,7 +755,7 @@ class FeaturePyramidMoEViT(BaseModel):
 
         self.embed_dim = embed_dim
         self.fpn_mode = fpn_mode
-        self.use_moe = use_moe
+        self.moe_num_routed = moe_num_routed
 
         if lateral_channels_list is None:
             lateral_channels_list = [64, 128, 256]
@@ -806,7 +798,6 @@ class FeaturePyramidMoEViT(BaseModel):
                 drop_rate=drop_rate,
                 linear_attention=linear_attention,
                 linear_layer_limit=linear_layer_limit,
-                use_moe=use_moe,
                 moe_num_shared=moe_num_shared,
                 moe_num_routed=moe_num_routed,
                 moe_num_activated_routed=moe_num_activated_routed,
@@ -835,7 +826,6 @@ class FeaturePyramidMoEViT(BaseModel):
                 drop_rate=drop_rate,
                 linear_attention=linear_attention,
                 linear_layer_limit=linear_layer_limit,
-                use_moe=use_moe,
                 moe_num_shared=moe_num_shared,
                 moe_num_routed=moe_num_routed,
                 moe_num_activated_routed=moe_num_activated_routed,
@@ -881,11 +871,8 @@ class FeaturePyramidMoEViT(BaseModel):
             x = self.conv_bottleneck(features)
             x = x.flatten(2).transpose(1, 2)
 
-            if self.use_moe:
-                x, aux_loss = self.vit(x)
-                return self.head(x[:, 0]), aux_loss
-            else:
-                x = self.vit(x)
+            x, aux_loss, expert_freq, expert_prob = self.vit(x)
+            return self.head(x[:, 0]), aux_loss, expert_freq, expert_prob
         else:
             p1, p2, p3 = features
 
@@ -897,13 +884,10 @@ class FeaturePyramidMoEViT(BaseModel):
             tokens2 = p2.flatten(2).transpose(1, 2)
             tokens3 = p3.flatten(2).transpose(1, 2)
 
-            if self.use_moe:
-                x, aux_loss = self.vit([tokens1, tokens2, tokens3])
-                return self.head(x[:, 0]), aux_loss
-            else:
-                x = self.vit([tokens1, tokens2, tokens3])
-
-        return self.head(x[:, 0])
+            x, aux_loss, expert_freq, expert_prob = self.vit(
+                [tokens1, tokens2, tokens3]
+            )
+            return self.head(x[:, 0]), aux_loss, expert_freq, expert_prob
 
 
 class SiameseFPNMoEViT(BaseModel):
@@ -915,7 +899,11 @@ class SiameseFPNMoEViT(BaseModel):
 
     @property
     def has_aux_loss(self) -> bool:
-        return self.use_moe
+        return True
+
+    @property
+    def arch_type(self) -> str:
+        return "moe"
 
     @classmethod
     def get_criterion(cls, margin: float = 1.0, **kwargs) -> nn.Module:
@@ -948,7 +936,6 @@ class SiameseFPNMoEViT(BaseModel):
         fpn_mode="32x32",
         linear_attention=True,
         linear_layer_limit=4,
-        use_moe=False,
         moe_num_shared=1,
         moe_num_routed=64,
         moe_num_activated_routed=6,
@@ -963,7 +950,7 @@ class SiameseFPNMoEViT(BaseModel):
         self.embed_dim = embed_dim
         self.embedding_dim = embedding_dim
         self.fpn_mode = fpn_mode
-        self.use_moe = use_moe
+        self.moe_num_routed = moe_num_routed
 
         if lateral_channels_list is None:
             lateral_channels_list = [64, 128, 256]
@@ -1006,7 +993,6 @@ class SiameseFPNMoEViT(BaseModel):
                 drop_rate=drop_rate,
                 linear_attention=linear_attention,
                 linear_layer_limit=linear_layer_limit,
-                use_moe=use_moe,
                 moe_num_shared=moe_num_shared,
                 moe_num_routed=moe_num_routed,
                 moe_num_activated_routed=moe_num_activated_routed,
@@ -1035,7 +1021,6 @@ class SiameseFPNMoEViT(BaseModel):
                 drop_rate=drop_rate,
                 linear_attention=linear_attention,
                 linear_layer_limit=linear_layer_limit,
-                use_moe=use_moe,
                 moe_num_shared=moe_num_shared,
                 moe_num_routed=moe_num_routed,
                 moe_num_activated_routed=moe_num_activated_routed,
@@ -1082,10 +1067,7 @@ class SiameseFPNMoEViT(BaseModel):
             x = self.conv_bottleneck(features)
             x = x.flatten(2).transpose(1, 2)
 
-            if self.use_moe:
-                x, _ = self.vit(x)
-            else:
-                x = self.vit(x)
+            x, aux_loss, expert_freq, expert_prob = self.vit(x)
         else:
             p1, p2, p3 = features
 
@@ -1097,10 +1079,9 @@ class SiameseFPNMoEViT(BaseModel):
             tokens2 = p2.flatten(2).transpose(1, 2)
             tokens3 = p3.flatten(2).transpose(1, 2)
 
-            if self.use_moe:
-                x, _ = self.vit([tokens1, tokens2, tokens3])
-            else:
-                x = self.vit([tokens1, tokens2, tokens3])
+            x, aux_loss, expert_freq, expert_prob = self.vit(
+                [tokens1, tokens2, tokens3]
+            )
 
         cls_token = x[:, 0]
         embedding = self.projection(cls_token)
@@ -1108,7 +1089,7 @@ class SiameseFPNMoEViT(BaseModel):
         if self.training:
             embedding = F.normalize(embedding, p=2, dim=1)
 
-        return embedding
+        return embedding, aux_loss, expert_freq, expert_prob
 
 
 class ModelVariant:
@@ -1179,7 +1160,7 @@ class ModelVariant:
     }
 
 
-def create_fpn_moe_vit(variant="base", num_classes=631, use_moe=False, **kwargs):
+def create_fpn_moe_vit(variant="base", num_classes=631, **kwargs):
     """Factory function to create FPN-MoE-ViT with specified variant."""
     config = getattr(ModelVariant, variant.upper(), ModelVariant.BASE).copy()
     config.update(kwargs)
@@ -1195,7 +1176,6 @@ def create_fpn_moe_vit(variant="base", num_classes=631, use_moe=False, **kwargs)
         num_bottlenecks=config.get("num_bottlenecks", 3),
         num_classes=num_classes,
         fpn_mode=config.get("fpn_mode", "32x32"),
-        use_moe=use_moe,
         moe_num_shared=config.get("moe_num_shared", 1),
         moe_num_routed=config.get("moe_num_routed", 8),
         moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1204,9 +1184,7 @@ def create_fpn_moe_vit(variant="base", num_classes=631, use_moe=False, **kwargs)
     )
 
 
-def create_siamese_fpn_moe_vit(
-    variant="base", embedding_dim=256, use_moe=False, **kwargs
-):
+def create_siamese_fpn_moe_vit(variant="base", embedding_dim=256, **kwargs):
     """Factory function to create Siamese FPN-MoE-ViT with specified variant."""
     config = getattr(ModelVariant, variant.upper(), ModelVariant.BASE).copy()
     config.update(kwargs)
@@ -1223,7 +1201,6 @@ def create_siamese_fpn_moe_vit(
         num_bottlenecks=config.get("num_bottlenecks", 3),
         num_classes=631,
         fpn_mode=config.get("fpn_mode", "32x32"),
-        use_moe=use_moe,
         moe_num_shared=config.get("moe_num_shared", 1),
         moe_num_routed=config.get("moe_num_routed", 8),
         moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1250,7 +1227,6 @@ class FeaturePyramidMoEViTTiny(FeaturePyramidMoEViT):
             num_bottlenecks=config.get("num_bottlenecks", 3),
             num_classes=num_classes,
             fpn_mode=config.get("fpn_mode", "32x32"),
-            use_moe=config.get("use_moe", False),
             moe_num_shared=config.get("moe_num_shared", 1),
             moe_num_routed=config.get("moe_num_routed", 4),
             moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1277,7 +1253,6 @@ class FeaturePyramidMoEViTSmall(FeaturePyramidMoEViT):
             num_bottlenecks=config.get("num_bottlenecks", 3),
             num_classes=num_classes,
             fpn_mode=config.get("fpn_mode", "32x32"),
-            use_moe=config.get("use_moe", False),
             moe_num_shared=config.get("moe_num_shared", 1),
             moe_num_routed=config.get("moe_num_routed", 8),
             moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1304,7 +1279,6 @@ class FeaturePyramidMoEViTLarge(FeaturePyramidMoEViT):
             num_bottlenecks=config.get("num_bottlenecks", 3),
             num_classes=num_classes,
             fpn_mode=config.get("fpn_mode", "32x32"),
-            use_moe=config.get("use_moe", False),
             moe_num_shared=config.get("moe_num_shared", 2),
             moe_num_routed=config.get("moe_num_routed", 32),
             moe_num_activated_routed=config.get("moe_num_activated_routed", 6),
@@ -1332,7 +1306,6 @@ class SiameseFPNMoEViTTiny(SiameseFPNMoEViT):
             num_bottlenecks=config.get("num_bottlenecks", 3),
             num_classes=num_classes,
             fpn_mode=config.get("fpn_mode", "32x32"),
-            use_moe=config.get("use_moe", False),
             moe_num_shared=config.get("moe_num_shared", 1),
             moe_num_routed=config.get("moe_num_routed", 4),
             moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1360,7 +1333,6 @@ class SiameseFPNMoEViTSmall(SiameseFPNMoEViT):
             num_bottlenecks=config.get("num_bottlenecks", 3),
             num_classes=num_classes,
             fpn_mode=config.get("fpn_mode", "32x32"),
-            use_moe=config.get("use_moe", False),
             moe_num_shared=config.get("moe_num_shared", 1),
             moe_num_routed=config.get("moe_num_routed", 8),
             moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1388,7 +1360,6 @@ class SiameseFPNMoEViTLarge(SiameseFPNMoEViT):
             num_bottlenecks=config.get("num_bottlenecks", 3),
             num_classes=num_classes,
             fpn_mode=config.get("fpn_mode", "32x32"),
-            use_moe=config.get("use_moe", False),
             moe_num_shared=config.get("moe_num_shared", 2),
             moe_num_routed=config.get("moe_num_routed", 32),
             moe_num_activated_routed=config.get("moe_num_activated_routed", 6),
@@ -1401,38 +1372,24 @@ if __name__ == "__main__":
     from torchinfo import summary
 
     print("=" * 80)
-    print("Testing FPN-MoE-ViT without MoE:")
+    print("Testing FPN-MoE-ViT:")
     print("=" * 80)
-    model = FeaturePyramidMoEViT(use_moe=False)
+    model = FeaturePyramidMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
     summary(model, input_size=(1, 3, 64, 64))
 
     print("\n" + "=" * 80)
-    print("Testing FPN-MoE-ViT with MoE:")
+    print("Testing SiameseFPNMoEViT:")
     print("=" * 80)
-    model = FeaturePyramidMoEViT(
-        use_moe=True, moe_num_routed=8, moe_num_activated_routed=2
-    )
+    model = SiameseFPNMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
     summary(model, input_size=(1, 3, 64, 64))
 
     print("\n" + "=" * 80)
-    print("Testing SiameseFPNMoEViT without MoE:")
+    print("Testing forward pass (returns aux_loss):")
     print("=" * 80)
-    model = SiameseFPNMoEViT(use_moe=False)
-    summary(model, input_size=(1, 3, 64, 64))
-
-    print("\n" + "=" * 80)
-    print("Testing SiameseFPNMoEViT with MoE:")
-    print("=" * 80)
-    model = SiameseFPNMoEViT(use_moe=True, moe_num_routed=8, moe_num_activated_routed=2)
-    summary(model, input_size=(1, 3, 64, 64))
-
-    print("\n" + "=" * 80)
-    print("Testing forward pass with MoE (returns aux_loss):")
-    print("=" * 80)
-    model = FeaturePyramidMoEViT(
-        use_moe=True, moe_num_routed=8, moe_num_activated_routed=2
-    )
+    model = FeaturePyramidMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
     x = torch.randn(2, 3, 64, 64)
-    output, aux_loss = model(x)
+    output, aux_loss, expert_freq, expert_prob = model(x)
     print(f"Output shape: {output.shape}")
     print(f"Aux loss: {aux_loss.item():.6f}")
+    print(f"Expert freq: {expert_freq}")
+    print(f"Expert prob: {expert_prob}")

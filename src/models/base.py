@@ -24,6 +24,11 @@ class BaseModel(nn.Module, ABC):
         """Whether the model has auxiliary loss (e.g., MoE balance loss)."""
         return False
 
+    @property
+    def arch_type(self) -> str:
+        """Architecture type: 'dense' or 'moe'."""
+        return "dense"
+
     @abstractmethod
     def forward(self, x):
         """Forward pass."""
