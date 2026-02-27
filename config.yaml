@@ -21,9 +21,15 @@ training:
 # Optimization configuration
 optimization:
   learning_rate: 1e-3
-  optimizer: adamw  # Options: adamw, adam, sgd
+  optimizer: adamw  # Options: adamw, adam, sgd, muon, muon_with_aux_adam
   weight_decay: 0.01
   momentum: 0.9  # Only used for SGD
+  # Muon-specific parameters (only used when optimizer is muon or muon_with_aux_adam)
+  muon_momentum: 0.95  # Muon momentum parameter
+  muon_ns_steps: 5  # Newton-Schulz iteration steps for Muon
+  # Parameters for muon_with_aux_adam
+  adam_lr: 3e-4  # Learning rate for Adam parts in MuonWithAuxAdam
+  adam_betas: [0.9, 0.95]  # Adam betas for MuonWithAuxAdam
 
 # Checkpointing configuration
 checkpointing:

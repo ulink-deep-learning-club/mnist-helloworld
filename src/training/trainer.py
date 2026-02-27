@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp.autocast_mode import autocast
+from torch.amp.grad_scaler import GradScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import time
@@ -42,7 +43,7 @@ class Trainer:
         self.dataset = dataset
         self.patience = patience
         self.use_amp = use_amp and device.type == "cuda"
-        self.scaler = GradScaler(enabled=self.use_amp)
+        self.scaler = GradScaler("cuda", enabled=self.use_amp)
 
         # Detect training paradigm based on model and dataset types
         self.paradigm = self._detect_paradigm()
@@ -178,7 +179,7 @@ class Trainer:
 
                 self.optimizer.zero_grad()
 
-                with autocast(enabled=self.use_amp):
+                with autocast("cuda", enabled=self.use_amp):
                     anchor_emb = self.model(anchor)
                     positive_emb = self.model(positive)
                     negative_emb = self.model(negative)
@@ -224,14 +225,14 @@ class Trainer:
 
                 self.optimizer.zero_grad()
 
-                with autocast(enabled=self.use_amp):
+                with autocast("cuda", enabled=self.use_amp):
                     outputs = self.model(images)
                     main_loss = self.criterion(outputs, labels)
 
                     # Handle auxiliary loss (e.g., MoE balance loss)
                     if self.model.has_aux_loss and isinstance(outputs, tuple):
                         outputs, aux_loss = outputs
-                        loss = torch.sqrt(main_loss ** 2 + aux_loss.mean() ** 2)
+                        loss = torch.sqrt(main_loss**2 + aux_loss.mean() ** 2)
                     else:
                         loss = main_loss
 
@@ -274,7 +275,7 @@ class Trainer:
                     positive = positive.to(self.device)
                     negative = negative.to(self.device)
 
-                    with autocast(enabled=self.use_amp):
+                    with autocast("cuda", enabled=self.use_amp):
                         anchor_emb = self.model(anchor)
                         positive_emb = self.model(positive)
                         negative_emb = self.model(negative)
@@ -297,7 +298,7 @@ class Trainer:
                 for images, labels in pbar:
                     images, labels = images.to(self.device), labels.to(self.device)
 
-                    with autocast(enabled=self.use_amp):
+                    with autocast("cuda", enabled=self.use_amp):
                         outputs = self.model(images)
                         loss = self.criterion(outputs, labels)
 

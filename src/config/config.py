@@ -90,6 +90,10 @@ class Config:
                 "scheduler_factor": args.scheduler_factor,
                 "triplet_margin": getattr(args, "triplet_margin", 1.0),
                 "embedding_dim": getattr(args, "embedding_dim", 256),
+                "muon_momentum": args.muon_momentum,
+                "muon_ns_steps": args.muon_ns_steps,
+                "adam_lr": args.adam_lr,
+                "adam_betas": args.adam_betas,
             },
             "checkpointing": {
                 "checkpoint_dir": args.checkpoint_dir,
@@ -129,6 +133,10 @@ def get_default_config() -> Dict[str, Any]:
             "scheduler_eta_min": 1e-6,
             "scheduler_patience": 5,
             "scheduler_factor": 0.1,
+            "muon_momentum": 0.95,
+            "muon_ns_steps": 5,
+            "adam_lr": 3e-4,
+            "adam_betas": [0.9, 0.95],
         },
         "checkpointing": {"checkpoint_dir": "checkpoints", "save_frequency": 10},
     }
@@ -186,8 +194,33 @@ def create_config_parser() -> argparse.ArgumentParser:
         "--optimizer",
         type=str,
         default="adamw",
-        choices=["adamw", "adam", "sgd"],
+        choices=["adamw", "adam", "sgd", "muon", "muon_with_aux_adam"],
         help="Optimizer",
+    )
+    parser.add_argument(
+        "--muon-momentum",
+        type=float,
+        default=0.95,
+        help="Muon momentum parameter (only used for muon optimizers)",
+    )
+    parser.add_argument(
+        "--muon-ns-steps",
+        type=int,
+        default=5,
+        help="Newton-Schulz iteration steps for Muon (only used for muon optimizers)",
+    )
+    parser.add_argument(
+        "--adam-lr",
+        type=float,
+        default=3e-4,
+        help="Learning rate for Adam parts in MuonWithAuxAdam",
+    )
+    parser.add_argument(
+        "--adam-betas",
+        type=float,
+        nargs=2,
+        default=[0.9, 0.95],
+        help="Adam betas for MuonWithAuxAdam (two values)",
     )
     parser.add_argument(
         "--scheduler",

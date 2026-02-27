@@ -136,6 +136,8 @@ def freeze_layers(model, freeze_specs, id_to_name=None):
 
 def create_optimizer(model, config):
     """Create optimizer based on configuration."""
+    import muon
+
     optimizer_name = config.optimization.get("optimizer", "adamw").lower()
     learning_rate = config.optimization.get("learning_rate", 1e-3)
     weight_decay = config.optimization.get("weight_decay", 0.01)
@@ -157,6 +159,42 @@ def create_optimizer(model, config):
             momentum=momentum,
             weight_decay=weight_decay,
         )
+    elif optimizer_name == "muon":
+        muon_lr = config.optimization.get("learning_rate", 1e-3)
+        muon_momentum = config.optimization.get("muon_momentum", 0.95)
+        muon_params = [p for p in trainable_params if p.ndim >= 2]
+        return muon.SingleDeviceMuon(
+            muon_params,
+            lr=muon_lr,
+            weight_decay=weight_decay,
+            momentum=muon_momentum,
+        )
+    elif optimizer_name == "muon_with_aux_adam":
+        muon_lr = config.optimization.get("learning_rate", 1e-3)
+        muon_momentum = config.optimization.get("muon_momentum", 0.95)
+        adam_lr = config.optimization.get("adam_lr", 3e-4)
+        adam_betas = tuple(config.optimization.get("adam_betas", [0.9, 0.95]))
+
+        hidden_weights = [p for p in trainable_params if p.ndim >= 2]
+        nonhidden_params = [p for p in trainable_params if p.ndim < 2]
+
+        param_groups = [
+            dict(
+                params=hidden_weights,
+                use_muon=True,
+                lr=muon_lr,
+                momentum=muon_momentum,
+                weight_decay=weight_decay,
+            ),
+            dict(
+                params=nonhidden_params,
+                use_muon=False,
+                lr=adam_lr,
+                betas=adam_betas,
+                weight_decay=weight_decay,
+            ),
+        ]
+        return muon.SingleDeviceMuonWithAuxAdam(param_groups)
     else:
         raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
