@@ -1124,7 +1124,7 @@ class ModelVariant:
         "moe_num_routed": 8,
         "moe_num_activated_routed": 2,
         "moe_expert_ratio": 0.25,
-        "moe_balance_factor": 0.01,
+        "moe_balance_factor": 0.1,
     }
 
     BASE = {
@@ -1140,7 +1140,7 @@ class ModelVariant:
         "moe_num_routed": 16,
         "moe_num_activated_routed": 4,
         "moe_expert_ratio": 0.25,
-        "moe_balance_factor": 0.01,
+        "moe_balance_factor": 0.1,
     }
 
     LARGE = {
@@ -1156,7 +1156,7 @@ class ModelVariant:
         "moe_num_routed": 32,
         "moe_num_activated_routed": 6,
         "moe_expert_ratio": 0.25,
-        "moe_balance_factor": 0.01,
+        "moe_balance_factor": 0.1,
     }
 
 

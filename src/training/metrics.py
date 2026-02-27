@@ -137,13 +137,19 @@ class MoEMetricsTracker:
     def __init__(self, num_experts: int = 8, save_path: str = None, **kwargs):
         self.num_experts = num_experts
         self.save_path = save_path
-        self.reset()
+        self.epoch_records: List[Dict] = []
+        self.current_epoch = 0
+        self.full_reset()
 
     def reset(self):
-        """Reset all metrics."""
+        """Reset batch-level metrics (call at start of epoch)."""
         self.balance_losses: List[float] = []
         self.expert_freq_records: List[List[float]] = []
         self.expert_prob_records: List[List[float]] = []
+
+    def full_reset(self):
+        """Reset all metrics including epoch history (call at start of training)."""
+        self.reset()
         self.epoch_records: List[Dict] = []
         self.current_epoch = 0
 
