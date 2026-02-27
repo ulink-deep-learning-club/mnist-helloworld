@@ -1,5 +1,5 @@
 import torch
-from typing import Dict, List
+from typing import Dict, List, Optional
 import time
 import json
 import os
@@ -64,7 +64,7 @@ class TripletMetricsTracker(MetricsTracker):
         self.negative_distances = []
         self.valid_triplets = 0
 
-    def update(
+    def update( # pyright: ignore[reportIncompatibleMethodOverride]
         self,
         loss: float,
         anchor: torch.Tensor,
@@ -134,7 +134,7 @@ class MetricsTrackerFactory:
 class MoEMetricsTracker:
     """Track MoE-specific metrics: balance loss, expert_freq, expert_prob."""
 
-    def __init__(self, num_experts: int = 8, save_path: str = None, **kwargs):
+    def __init__(self, num_experts: int = 8, save_path: Optional[str] = None, **kwargs):
         self.num_experts = num_experts
         self.save_path = save_path
         self.epoch_records: List[Dict] = []
@@ -150,14 +150,14 @@ class MoEMetricsTracker:
     def full_reset(self):
         """Reset all metrics including epoch history (call at start of training)."""
         self.reset()
-        self.epoch_records: List[Dict] = []
+        self.epoch_records = []
         self.current_epoch = 0
 
     def update(
         self,
         balance_loss: float,
-        expert_freq: torch.Tensor = None,
-        expert_prob: torch.Tensor = None,
+        expert_freq: Optional[torch.Tensor] = None,
+        expert_prob: Optional[torch.Tensor] = None,
     ):
         """Update metrics with batch results."""
         self.balance_losses.append(balance_loss)
@@ -198,13 +198,13 @@ class MoEMetricsTracker:
         ]
         return avg_prob
 
-    def get_metrics(self) -> Dict[str, float]:
+    def get_metrics(self) -> Dict[str, float | List[float]]:
         """Get all MoE metrics as dictionary."""
-        metrics = {
+        metrics: Dict[str, float | List[float]] = {
             "balance_loss": self.get_average_balance_loss(),
         }
-        metrics[f"expert_freq_avg"] = self.get_average_expert_freq()
-        metrics[f"expert_prob_avg"] = self.get_average_expert_prob()
+        metrics["expert_freq_avg"] = self.get_average_expert_freq()
+        metrics["expert_prob_avg"] = self.get_average_expert_prob()
         return metrics
 
     def get_last_expert_stats(self) -> Dict:
@@ -229,7 +229,7 @@ class MoEMetricsTracker:
         self.epoch_records.append(record)
         self.current_epoch = epoch
 
-    def save_to_json(self, filepath: str = None):
+    def save_to_json(self, filepath: Optional[str] = None):
         """Save all epoch records to JSON file."""
         path = filepath or self.save_path
         if not path:

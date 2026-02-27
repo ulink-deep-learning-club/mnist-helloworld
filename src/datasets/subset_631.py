@@ -75,8 +75,10 @@ class Subset631Dataset(ClassificationDataset):
         if self._train_dataset is None:
             self.load_data()
 
+        assert self._train_dataset is not None
+
         # ImageFolder stores class_to_idx mapping
-        full_dataset = self._train_dataset.dataset
+        full_dataset = self._train_dataset.dataset  # pyright: ignore[reportAttributeAccessIssue]
         idx_to_class = {v: k for k, v in full_dataset.class_to_idx.items()}
         return idx_to_class
 

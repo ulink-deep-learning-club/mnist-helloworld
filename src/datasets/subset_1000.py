@@ -1,6 +1,4 @@
 import os
-import random
-from tqdm import tqdm
 import torch
 import torchvision
 from torch.utils.data import random_split
@@ -79,7 +77,7 @@ class Subset1000Dataset(ClassificationDataset):
         assert self._train_dataset is not None, "Train dataset is not loaded"
 
         # ImageFolder stores class_to_idx mapping
-        full_dataset = self._train_dataset.dataset
+        full_dataset = self._train_dataset.dataset # pyright: ignore[reportAttributeAccessIssue]
         idx_to_class = {v: k for k, v in full_dataset.class_to_idx.items()}
         return idx_to_class
 
@@ -170,13 +168,11 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
             data_by_label,
             self.triplets_per_class,
             available_indices=train_indices,
-            desc="Train triplets",
         )
         test_triplets = self._generate_triplets(
             data_by_label,
             self.triplets_per_class // 10,
             available_indices=test_indices,
-            desc="Test triplets",
         )
 
         self._train_dataset = FixedTripletDataset(
@@ -212,7 +208,6 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
             self._train_indices_by_label,
             self.triplets_per_class,
             available_indices=all_train_indices,
-            desc="Regen triplets",
         )
 
         self._train_dataset = FixedTripletDataset(
@@ -238,8 +233,10 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
         if self._train_dataset is None:
             self.load_data()
 
+        assert self._train_dataset is not None, "Cannot load training dataset"
+
         # ImageFolder stores class_to_idx mapping
-        full_dataset = self._train_dataset.dataset
+        full_dataset = self._train_dataset.dataset # pyright: ignore[reportAttributeAccessIssue]
         idx_to_class = {v: k for k, v in full_dataset.class_to_idx.items()}
         return idx_to_class
 

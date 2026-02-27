@@ -10,7 +10,8 @@ import os
 from typing import Optional, Dict, Any
 from .checkpoint import CheckpointManager
 from .experiment import ExperimentManager
-from .metrics import MetricsTracker, MoEMetricsTracker
+from .metrics import TripletMetricsTracker, MoEMetricsTracker
+from ..models.base import BaseModel
 from ..datasets.base import BaseDataset
 from ..utils import setup_logger
 
@@ -22,7 +23,7 @@ class Trainer:
 
     def __init__(
         self,
-        model: nn.Module,
+        model: BaseModel,
         train_loader: DataLoader,
         val_loader: DataLoader,
         criterion: nn.Module,
@@ -197,7 +198,8 @@ class Trainer:
 
         if self.paradigm == "triplet":
             # Triplet training
-            for batch_idx, (anchor, positive, negative, labels) in enumerate(pbar):
+            assert isinstance(self.train_metrics, TripletMetricsTracker)
+            for _, (anchor, positive, negative, labels) in enumerate(pbar):
                 anchor = anchor.to(self.device)
                 positive = positive.to(self.device)
                 negative = negative.to(self.device)
@@ -248,7 +250,7 @@ class Trainer:
 
                 # Update MOE metrics if applicable
                 if self.is_moe and hasattr(self, "train_moe_metrics"):
-                    if expert_freq is not None:
+                    if expert_freq is not None and expert_prob is not None and aux_loss_val is not None:
                         self.train_moe_metrics.update(
                             aux_loss_val.item()
                             if isinstance(aux_loss_val, torch.Tensor)
@@ -299,7 +301,7 @@ class Trainer:
 
                 # Update MOE metrics if applicable
                 if self.is_moe and hasattr(self, "train_moe_metrics"):
-                    if expert_freq is not None:
+                    if expert_freq is not None and expert_prob is not None:
                         self.train_moe_metrics.update(
                             aux_loss.item() if aux_loss is not None else 0.0,
                             expert_freq,
@@ -309,7 +311,11 @@ class Trainer:
                 if self.model.has_aux_loss and isinstance(outputs, tuple):
                     if len(outputs) == 2:
                         outputs, _ = outputs
-                self.train_metrics.update(loss.item(), outputs, labels)
+
+                if isinstance(outputs, torch.Tensor):
+                    self.train_metrics.update(loss.item(), outputs, labels)
+                else:
+                    logger.warning("Bug: outputs should be tensor. Cannot update train metrics")
 
                 # Update progress bar
                 metrics = self.train_metrics.get_metrics()
@@ -338,6 +344,7 @@ class Trainer:
 
         with torch.no_grad():
             if self.paradigm == "triplet":
+                assert isinstance(self.val_metrics, TripletMetricsTracker)
                 # Triplet validation
                 for anchor, positive, negative, labels in pbar:
                     anchor = anchor.to(self.device)
@@ -361,7 +368,7 @@ class Trainer:
                                 anchor_emb, _ = anchor_emb
                                 positive_emb, _ = positive_emb
                                 negative_emb, _ = negative_emb
-                            if self.is_moe and expert_freq is not None:
+                            if self.is_moe and expert_freq is not None and expert_prob:
                                 self.val_moe_metrics.update(
                                     0.0, expert_freq, expert_prob
                                 )
@@ -403,7 +410,11 @@ class Trainer:
 
                         loss = self.criterion(outputs, labels)
 
-                    self.val_metrics.update(loss.item(), outputs, labels)
+
+                    if isinstance(outputs, torch.Tensor):
+                        self.val_metrics.update(loss.item(), outputs, labels)
+                    else:
+                        logger.warning("Bug: outputs should be tensor. Cannot update validate metrics")
 
                     # Update progress bar
                     metrics = self.val_metrics.get_metrics()

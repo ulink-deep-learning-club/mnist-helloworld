@@ -1,6 +1,10 @@
+from __future__ import annotations
 from abc import ABC, abstractmethod
 import torch.nn as nn
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..training.metrics import MetricsTracker
 
 
 class BaseModel(nn.Module, ABC):
@@ -30,7 +34,7 @@ class BaseModel(nn.Module, ABC):
         return "dense"
 
     @abstractmethod
-    def forward(self, x):
+    def forward(self, x) -> Any:
         """Forward pass."""
         pass
 
@@ -42,7 +46,7 @@ class BaseModel(nn.Module, ABC):
 
     @classmethod
     @abstractmethod
-    def get_metrics_tracker(cls, **kwargs):
+    def get_metrics_tracker(cls, **kwargs) -> MetricsTracker:
         """Return the appropriate metrics tracker for this model type."""
         pass
 

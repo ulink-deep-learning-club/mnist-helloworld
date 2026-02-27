@@ -1,5 +1,6 @@
+import json
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 
@@ -22,8 +23,8 @@ class BaseDataset(ABC):
         self.root = root
         self.download = download
         self.reapply_transforms = reapply_transforms
-        self._train_dataset: Optional[Dataset] = None
-        self._test_dataset: Optional[Dataset] = None
+        self._train_dataset: Optional[Dataset[Any]] = None
+        self._test_dataset: Optional[Dataset[Any]] = None
         self._train_transform = self.get_train_transform()
         self._test_transform = self.get_test_transform()
 
@@ -44,7 +45,7 @@ class BaseDataset(ABC):
         pass
 
     @abstractmethod
-    def load_data(self):
+    def load_data(self) -> Any:
         """Load the dataset."""
         pass
 
@@ -80,7 +81,6 @@ class BaseDataset(ABC):
         Args:
             output_path: Path to save the JSON file.
         """
-        import json
 
         mapping = self.get_index_label_mapping()
         # Convert int keys to strings for JSON
@@ -207,8 +207,7 @@ class BalancedTripletDataset(TripletDatasetBase):
         self,
         data_by_label: dict,
         per_class: int,
-        available_indices: list = None,
-        desc: str = "Triplets",
+        available_indices: list | None = None,
     ) -> list:
         """Generate balanced triplets with equal samples per class.
 
@@ -234,15 +233,6 @@ class BalancedTripletDataset(TripletDatasetBase):
             }
 
         labels = list(data_by_label.keys())
-        total_triplets = len(labels) * per_class
-
-        # Try to use tqdm for progress bar, fall back to simple loop
-        try:
-            from tqdm import tqdm
-
-            iterator = tqdm(range(total_triplets), desc=desc, unit=" triplet")
-        except ImportError:
-            iterator = range(total_triplets)
 
         for anchor_label in labels:
             anchor_indices = data_by_label[anchor_label]
@@ -257,7 +247,7 @@ class BalancedTripletDataset(TripletDatasetBase):
                     positive_idx = random.choice(anchor_indices)
 
                 # Sample negative (different label)
-                negative_label = random.choice([l for l in labels if l != anchor_label])
+                negative_label = random.choice([label for label in labels if label != anchor_label])
                 negative_indices = data_by_label[negative_label]
                 if not negative_indices:
                     continue  # Skip if no negative samples available

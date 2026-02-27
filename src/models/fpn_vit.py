@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any
 
+MetricsTracker = None
 try:
     from .base import BaseModel
     from ..training.metrics import MetricsTracker
@@ -410,7 +411,6 @@ class MultiScaleVisionTransformer(nn.Module):
         self.embed_dim = embed_dim
         self.num_scales = num_scales
         self.num_patches_per_scale = num_patches_per_scale
-        total_patches = sum(num_patches_per_scale)
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
@@ -621,6 +621,7 @@ class FeaturePyramidViT(BaseModel):
     @classmethod
     def get_metrics_tracker(cls, **kwargs) -> Any:
         """Return standard metrics tracker for classification."""
+        assert MetricsTracker is not None, "Cannot import MetricsTracker"
         return MetricsTracker()
 
     def __init__(
@@ -1051,6 +1052,7 @@ def create_fpn_vit(variant="base", num_classes=631, **kwargs):
     config.update(kwargs)
 
     return FeaturePyramidViT(
+        input_channels=config.get("input_channels", 3),
         preprocess_channels=config["preprocess_channels"],
         fpn_out_channels=config["fpn_out_channels"],
         embed_dim=config["embed_dim"],
@@ -1076,6 +1078,7 @@ def create_siamese_fpn_vit(variant="base", embedding_dim=256, **kwargs):
     config.update(kwargs)
 
     return SiameseFPNViT(
+        input_channels=config.get("input_channels", 3),
         preprocess_channels=config["preprocess_channels"],
         fpn_out_channels=config["fpn_out_channels"],
         embed_dim=config["embed_dim"],
@@ -1097,6 +1100,7 @@ class FeaturePyramidViTTiny(FeaturePyramidViT):
         config = ModelVariant.TINY.copy()
         config.update(kwargs)
         super().__init__(
+            input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
             fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],
@@ -1117,6 +1121,7 @@ class FeaturePyramidViTSmall(FeaturePyramidViT):
         config = ModelVariant.SMALL.copy()
         config.update(kwargs)
         super().__init__(
+            input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
             fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],
@@ -1137,6 +1142,7 @@ class FeaturePyramidViTLarge(FeaturePyramidViT):
         config = ModelVariant.LARGE.copy()
         config.update(kwargs)
         super().__init__(
+            input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
             fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],
@@ -1157,6 +1163,7 @@ class SiameseFPNViTTiny(SiameseFPNViT):
         config = ModelVariant.TINY.copy()
         config.update(kwargs)
         super().__init__(
+            input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
             fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],
@@ -1178,6 +1185,7 @@ class SiameseFPNViTSmall(SiameseFPNViT):
         config = ModelVariant.SMALL.copy()
         config.update(kwargs)
         super().__init__(
+            input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
             fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],
@@ -1199,6 +1207,7 @@ class SiameseFPNViTLarge(SiameseFPNViT):
         config = ModelVariant.LARGE.copy()
         config.update(kwargs)
         super().__init__(
+            input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
             fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],

@@ -20,10 +20,10 @@ Usage:
         --image path/to/query/image.png
 """
 
-import os
 import argparse
 from typing import List, Optional, Tuple
 from pathlib import Path
+from torchvision import transforms
 
 import torch
 import numpy as np
@@ -246,7 +246,6 @@ def extract_embeddings(
         embeddings: Array of shape (N, embedding_dim)
         labels: Array of shape (N,)
     """
-    from torch.utils.data import DataLoader
 
     # Get dataloader
     _, val_loader = dataset.get_dataloaders(
@@ -338,16 +337,18 @@ def index_command(args):
     payloads = None
     test_dataset = dataset._test_dataset
 
+    assert isinstance(test_dataset, torch.utils.data.Dataset), "Test dataset is None"
+
     # Handle Subset wrapper (from random_split) to access underlying dataset
     base_dataset = test_dataset
     if hasattr(test_dataset, "dataset"):
-        base_dataset = test_dataset.dataset
+        base_dataset = test_dataset.dataset # pyright: ignore[reportAttributeAccessIssue]
 
     if hasattr(base_dataset, "imgs") and hasattr(base_dataset, "classes"):
         # Get the indices if it's a Subset
         indices = None
         if hasattr(test_dataset, "indices"):
-            indices = test_dataset.indices
+            indices = test_dataset.indices # pyright: ignore[reportAttributeAccessIssue]
 
         payloads = []
         for i, label in enumerate(labels):
@@ -358,8 +359,8 @@ def index_command(args):
                 orig_idx = i
 
             # Get image path and character
-            image_path = base_dataset.imgs[orig_idx][0]
-            character = base_dataset.classes[label]
+            image_path = base_dataset.imgs[orig_idx][0] # pyright: ignore[reportAttributeAccessIssue]
+            character = base_dataset.classes[label] # pyright: ignore[reportAttributeAccessIssue]
 
             payloads.append(
                 {
@@ -403,16 +404,6 @@ def search_command(args):
     print(f"Loading query image: {args.image}")
     image = Image.open(args.image).convert("RGB")
 
-    # Get dataset transforms
-    dataset = DatasetRegistry.create(
-        args.dataset or "subset_1000",
-        root=args.data_root,
-        download=False,
-    )
-
-    # Apply transforms
-    from torchvision import transforms
-
     # Default transform
     default_transform = transforms.Compose(
         [
@@ -420,7 +411,7 @@ def search_command(args):
             transforms.ToTensor(),
         ]
     )
-    image_tensor = default_transform(image).unsqueeze(0).to(device)
+    image_tensor = default_transform(image).unsqueeze(0).to(device) # pyright: ignore[reportAttributeAccessIssue]
     min_val = image_tensor.min()
     image_tensor = (image_tensor - min_val) / (image_tensor.max() - min_val) * 255
     # save tensor to image

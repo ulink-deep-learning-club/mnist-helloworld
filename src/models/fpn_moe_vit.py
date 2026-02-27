@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Any
 
+MetricsTracker = None
 try:
     from .base import BaseModel
     from ..training.metrics import MetricsTracker
@@ -527,7 +528,6 @@ class MultiScaleVisionTransformer(nn.Module):
         self.embed_dim = embed_dim
         self.num_scales = num_scales
         self.num_patches_per_scale = num_patches_per_scale
-        total_patches = sum(num_patches_per_scale)
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
 
@@ -722,6 +722,7 @@ class FeaturePyramidMoEViT(BaseModel):
 
     @classmethod
     def get_metrics_tracker(cls, **kwargs) -> Any:
+        assert MetricsTracker is not None, "Cannot import MetricsTracker"
         return MetricsTracker()
 
     def __init__(

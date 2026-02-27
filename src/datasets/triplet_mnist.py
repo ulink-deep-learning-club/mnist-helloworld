@@ -1,8 +1,6 @@
 import torchvision
 import torchvision.transforms as transforms
-import torch
 import random
-from typing import Tuple
 from torch.utils.data import Dataset
 from .base import TripletDatasetBase, BalancedTripletDataset, FixedTripletDataset
 
@@ -66,10 +64,10 @@ class TripletMNISTDataset(TripletDatasetBase):
         self.train_data_by_label = {i: [] for i in range(10)}
         self.test_data_by_label = {i: [] for i in range(10)}
 
-        for idx, (img, label) in enumerate(base_train):
+        for idx, (img, label) in enumerate(base_train): # pyright: ignore[ reportArgumentType]
             self.train_data_by_label[label].append(idx)
 
-        for idx, (img, label) in enumerate(base_test):
+        for idx, (img, label) in enumerate(base_test): # pyright: ignore[ reportArgumentType]
             self.test_data_by_label[label].append(idx)
 
         # Create triplet datasets
@@ -234,10 +232,10 @@ class BalancedTripletMNISTDataset(BalancedTripletDataset):
         train_by_label = {i: [] for i in range(10)}
         test_by_label = {i: [] for i in range(10)}
 
-        for idx, (img, label) in enumerate(base_train):
+        for idx, (img, label) in enumerate(base_train):  # pyright: ignore[ reportArgumentType]
             train_by_label[label].append(idx)
 
-        for idx, (img, label) in enumerate(base_test):
+        for idx, (img, label) in enumerate(base_test):  # pyright: ignore[ reportArgumentType]
             test_by_label[label].append(idx)
 
         # Generate triplets
@@ -271,7 +269,7 @@ class BalancedTripletMNISTDataset(BalancedTripletDataset):
         )
 
         train_by_label = {i: [] for i in range(10)}
-        for idx, (img, label) in enumerate(base_train):
+        for idx, (_, label) in enumerate(base_train):  # pyright: ignore[ reportArgumentType]
             train_by_label[label].append(idx)
 
         train_triplets = self._generate_triplets(
