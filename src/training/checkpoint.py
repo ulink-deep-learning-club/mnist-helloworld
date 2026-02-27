@@ -5,6 +5,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from ..utils import setup_logger
+
+logger = setup_logger("checkpoint")
+
 
 class CheckpointManager:
     """Manage model checkpoints within an experiment."""
@@ -86,18 +90,20 @@ class CheckpointManager:
             # Report results
             total_keys = len(state_dict)
             loaded_keys = len(compatible_layers)
-            print(f"Checkpoint loaded: {loaded_keys}/{total_keys} layers matched")
+            logger.info(f"Checkpoint loaded: {loaded_keys}/{total_keys} layers matched")
             if incompatible_keys:
-                print(f"Skipped {len(incompatible_keys)} incompatible layers:")
+                logger.info(f"Skipped {len(incompatible_keys)} incompatible layers:")
                 for key, ckpt_shape, model_shape in incompatible_keys[:10]:
                     if model_shape:
-                        print(
+                        logger.info(
                             f"  {key}: checkpoint {ckpt_shape} vs model {model_shape}"
                         )
                     else:
-                        print(f"  {key}: not in model (checkpoint shape: {ckpt_shape})")
+                        logger.info(
+                            f"  {key}: not in model (checkpoint shape: {ckpt_shape})"
+                        )
                 if len(incompatible_keys) > 10:
-                    print(f"  ... and {len(incompatible_keys) - 10} more")
+                    logger.info(f"  ... and {len(incompatible_keys) - 10} more")
 
         # Determine if checkpoint was fully restored
         fully_restored = strict or (len(incompatible_keys) == 0 if not strict else True)
@@ -112,10 +118,10 @@ class CheckpointManager:
                 assert optimizer is not None, "Optimizer is None, cannot load state"
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             except ValueError as e:
-                print(f"Warning: Could not load optimizer state: {e}")
-                print("Optimizer will be initialized from scratch")
+                logger.warning(f"Could not load optimizer state: {e}")
+                logger.warning("Optimizer will be initialized from scratch")
         elif optimizer and "optimizer_state_dict" in checkpoint and not fully_restored:
-            print(
+            logger.info(
                 "Model architecture changed, optimizer state will be initialized from scratch"
             )
 

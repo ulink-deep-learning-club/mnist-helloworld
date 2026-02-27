@@ -63,17 +63,25 @@ def parse_freeze_spec(spec):
         return ("name", spec.strip())
 
 
-def freeze_layers(model, freeze_specs, id_to_name=None):
+def freeze_layers(model, freeze_specs, id_to_name=None, logger=None):
     """Freeze model layers based on specifications.
 
     Args:
         model: The neural network model
         freeze_specs: List of freeze specifications (layer IDs, ranges, or name patterns)
         id_to_name: Optional mapping from layer IDs to module names
+        logger: Optional logger for warnings
 
     Returns:
         Tuple of (frozen_count, modules_to_freeze)
     """
+
+    def warn(msg):
+        if logger:
+            logger.warning(msg)
+        else:
+            print(f"Warning: {msg}")
+
     if not freeze_specs:
         return 0, set()
 
@@ -93,7 +101,7 @@ def freeze_layers(model, freeze_specs, id_to_name=None):
             if layer_id in id_to_name:
                 modules_to_freeze.add(id_to_name[layer_id])
             else:
-                print(f"Warning: Layer ID '{layer_id}' not found")
+                warn(f"Layer ID '{layer_id}' not found")
 
         elif spec_type == "range":
             # Range of layer IDs (same depth)
@@ -102,8 +110,8 @@ def freeze_layers(model, freeze_specs, id_to_name=None):
             end_depth, end_idx = map(int, end_id.split("-"))
 
             if start_depth != end_depth:
-                print(
-                    f"Warning: Range {start_id}:{end_id} has different depths, using start depth"
+                warn(
+                    f"Range {start_id}:{end_id} has different depths, using start depth"
                 )
 
             depth = start_depth
@@ -320,12 +328,11 @@ def main():
 
     # Export class mappings to experiment directory
     try:
-        mapping_path = dataset.export_index_label_json(
+        dataset.export_index_label_json(
             output_path=os.path.join(
                 experiment_manager.experiment_dir, "index_label_mapping.json"
             )
         )
-        logger.info(f"Exported class mappings to {mapping_path}")
     except (NotImplementedError, AttributeError) as e:
         logger.warning(f"Could not export class mappings: {e}")
 
@@ -397,7 +404,9 @@ def main():
 
     # Freeze layers if specified
     if args.freeze:
-        frozen_count, frozen_modules = freeze_layers(model, args.freeze, id_to_name)
+        frozen_count, frozen_modules = freeze_layers(
+            model, args.freeze, id_to_name, logger
+        )
         logger.info(
             f"Frozen {frozen_count} parameter tensors in modules: {sorted(frozen_modules)}"
         )

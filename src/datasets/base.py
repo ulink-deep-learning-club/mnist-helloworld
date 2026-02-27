@@ -3,6 +3,10 @@ from typing import Tuple, Optional
 from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 
+from ..utils import setup_logger
+
+logger = setup_logger("datasets")
+
 
 class BaseDataset(ABC):
     """Abstract base class for all datasets."""
@@ -85,7 +89,7 @@ class BaseDataset(ABC):
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(mapping_str_keys, f, ensure_ascii=False, indent=2)
 
-        print(f"Index-label mapping exported to {output_path}")
+        logger.info(f"Index-label mapping exported to {output_path}")
         return output_path
 
     def get_dataloaders(

@@ -11,6 +11,9 @@ from typing import Optional, Dict, Any
 from .checkpoint import CheckpointManager
 from .experiment import ExperimentManager
 from ..datasets.base import BaseDataset
+from ..utils import setup_logger
+
+logger = setup_logger("trainer")
 
 
 class Trainer:
@@ -396,12 +399,12 @@ class Trainer:
             plt.close()
 
         except ImportError:
-            print("Warning: matplotlib not available, skipping plot generation")
+            logger.warning("matplotlib not available, skipping plot generation")
 
     def train(self, epochs: int, start_epoch: int = 0) -> Dict[str, Any]:
         """Train the model for specified epochs."""
-        print(f"Starting training for {epochs} epochs")
-        print(f"Experiment directory: {self.experiment_manager.experiment_dir}")
+        logger.info(f"Starting training for {epochs} epochs")
+        logger.info(f"Experiment directory: {self.experiment_manager.experiment_dir}")
         start_time = time.time()
 
         self.best_accuracy = 0.0
@@ -443,7 +446,7 @@ class Trainer:
 
             # Print epoch summary
             if self.paradigm == "triplet":
-                print(
+                logger.info(
                     f"Epoch {epoch + 1}/{epochs} - "
                     f"Train Loss: {train_metrics['loss']:.4f}, "
                     f"Train Valid: {train_metrics['accuracy']:.2f}% - "
@@ -454,7 +457,7 @@ class Trainer:
                     f"Speed: {train_speed:.2f} it/s"
                 )
             else:
-                print(
+                logger.info(
                     f"Epoch {epoch + 1}/{epochs} - "
                     f"Train Loss: {train_metrics['loss']:.4f}, "
                     f"Train Acc: {train_metrics['accuracy']:.2f}% - "
@@ -504,7 +507,7 @@ class Trainer:
                     self.best_accuracy = val_metrics["accuracy"]
                     self.best_epoch = epoch + 1
                     self.epochs_without_improvement = 0
-                    print(
+                    logger.info(
                         f"New best model saved with accuracy: {self.best_accuracy:.2f}%"
                     )
                 else:
@@ -515,7 +518,7 @@ class Trainer:
                     self.patience > 0
                     and self.epochs_without_improvement >= self.patience
                 ):
-                    print(
+                    logger.info(
                         f"\nEarly stopping triggered! No improvement for {self.patience} epochs. "
                         f"Best was epoch {self.best_epoch} with accuracy: {self.best_accuracy:.2f}%"
                     )
@@ -547,9 +550,9 @@ class Trainer:
                     self.dataset._train_dataset,  # type: ignore
                     **self._train_loader_kwargs,
                 )
-                print("Dataset transformation re-applied")
+                logger.info("Dataset transformation re-applied")
             else:
-                print("Skipping reapplication of dataset transformations")
+                logger.info("Skipping reapplication of dataset transformations")
 
         training_time = time.time() - start_time
 

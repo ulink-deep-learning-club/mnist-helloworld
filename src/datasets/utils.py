@@ -6,6 +6,10 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import torchvision.transforms as transforms
 
+from ..utils import setup_logger
+
+logger = setup_logger("datasets_utils")
+
 
 def decode_label(label):
     """Decode label to proper Chinese character.
@@ -58,7 +62,7 @@ def export_index_label_json(
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(mapping_str_keys, f, ensure_ascii=False, indent=2)
 
-    print(f"Index-label mapping exported to {output_path}")
+    logger.info(f"Index-label mapping exported to {output_path}")
     return output_path
 
 

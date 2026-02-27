@@ -11,6 +11,9 @@ from .utils import (
     get_character_test_transform,
     export_index_label_json,
 )
+from ..utils import setup_logger
+
+logger = setup_logger("subset_1000")
 
 
 class Subset1000Dataset(ClassificationDataset):
@@ -140,11 +143,11 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
         data_path = os.path.join(self.root, "subset_1000")
 
         # Load full dataset without transform first to organize by label
-        print("Loading dataset from disk...")
+        logger.info("Loading dataset from disk...")
         full_dataset = torchvision.datasets.ImageFolder(root=data_path, transform=None)
 
         # Organize by label with progress bar
-        print(f"Organizing {len(full_dataset)} samples by label...")
+        logger.info(f"Organizing {len(full_dataset)} samples by label...")
         data_by_label = {}
         # Use imgs attribute directly for faster access (avoids __getitem__ overhead)
         for idx, (_, label) in enumerate(full_dataset.imgs):
@@ -162,7 +165,7 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
 
         # Create datasets with transforms
 
-        print(f"Generating triplets for {len(data_by_label)} classes...")
+        logger.info(f"Generating triplets for {len(data_by_label)} classes...")
         train_triplets = self._generate_triplets(
             data_by_label,
             self.triplets_per_class,
@@ -190,7 +193,7 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
         # Store train indices for reload
         train_set = set(train_indices)
 
-        print("Filtering train indices by label...")
+        logger.info("Filtering train indices by label...")
         self._train_indices_by_label = {
             label: [idx for idx in indices if idx in train_set]
             for label, indices in data_by_label.items()
@@ -201,7 +204,7 @@ class TripletSubset1000Dataset(BalancedTripletDataset):
         data_path = os.path.join(self.root, "subset_1000")
         full_dataset = torchvision.datasets.ImageFolder(root=data_path, transform=None)
 
-        print("Regenerating training triplets...")
+        logger.info("Regenerating training triplets...")
         all_train_indices = [
             idx for indices in self._train_indices_by_label.values() for idx in indices
         ]
