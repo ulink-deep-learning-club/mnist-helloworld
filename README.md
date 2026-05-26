@@ -12,10 +12,10 @@ A refactored, modular deep learning framework that supports multiple datasets, m
 - **Experiment Management**: YOLO-style runs/expX directories with resume and fork support
 
 ### Supported Datasets
-- MNIST (28x28 grayscale, 10 classes)
-- CIFAR-10 (32x32 RGB, 10 classes)
-- Subset631 (CASIA-HWDB 2.1 subset with 631 samples)
-- Subset1000 (CASIA-HWDB 2.1 subset with 1000 samples)
+- MNIST (28×28 grayscale, 10 classes, 1 channel)
+- CIFAR-10 (32×32 RGB, 10 classes, 3 channels)
+- Subset631 (CASIA-HWDB 2.1 subset with 631 classes, 1 channel by default)
+- Subset1000 (CASIA-HWDB 2.1 subset with 1000 classes, 1 channel by default)
 - TripletMNIST (Triplet learning dataset)
 - BalancedTripletMNIST (Balanced triplet dataset)
 - TripletSubset1000 (CASIA-HWDB 2.1 triplet subset with 1000 samples)
@@ -25,7 +25,7 @@ A refactored, modular deep learning framework that supports multiple datasets, m
 
 #### Classic Models
 - LeNet-5 (classic architecture)
-- AlexNet
+- AlexNet (adapted for smaller inputs)
 - MyNet (custom architecture)
 
 #### Vision Transformer (ViT) Models

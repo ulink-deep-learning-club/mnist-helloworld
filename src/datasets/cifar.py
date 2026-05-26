@@ -22,32 +22,43 @@ class CIFARDataset(ClassificationDataset):
     def get_train_transform(
         self, image_size: int = 32, output_channels: int = 3
     ) -> transforms.Compose:
-        mean = (0.1307,) if output_channels == 1 else (0.4914, 0.4822, 0.4465)
-        std = (0.3081,) if output_channels == 1 else (0.2023, 0.1994, 0.2010)
-        return transforms.Compose(
-            [
-                transforms.Grayscale(num_output_channels=output_channels),
-                ResizePad(image_size, pad_value=0),
-                transforms.RandomCrop(image_size, padding=image_size // 8),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
+        # CIFAR images are natively RGB (3 channels).
+        # Only apply Grayscale when explicitly converting to 1-channel.
+        transform_list = []
+        if output_channels == 1:
+            transform_list.append(transforms.Grayscale(num_output_channels=1))
+            mean = (0.1307,)
+            std = (0.3081,)
+        else:
+            # Use proper RGB normalization for native color images
+            mean = (0.4914, 0.4822, 0.4465)
+            std = (0.2023, 0.1994, 0.2010)
+        transform_list.extend([
+            ResizePad(image_size, pad_value=0),
+            transforms.RandomCrop(image_size, padding=image_size // 8),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ])
+        return transforms.Compose(transform_list)
 
     def get_test_transform(
         self, image_size: int = 32, output_channels: int = 3
     ) -> transforms.Compose:
-        mean = (0.1307,) if output_channels == 1 else (0.4914, 0.4822, 0.4465)
-        std = (0.3081,) if output_channels == 1 else (0.2023, 0.1994, 0.2010)
-        return transforms.Compose(
-            [
-                transforms.Grayscale(num_output_channels=output_channels),
-                ResizePad(image_size, pad_value=0),
-                transforms.ToTensor(),
-                transforms.Normalize(mean, std),
-            ]
-        )
+        transform_list = []
+        if output_channels == 1:
+            transform_list.append(transforms.Grayscale(num_output_channels=1))
+            mean = (0.1307,)
+            std = (0.3081,)
+        else:
+            mean = (0.4914, 0.4822, 0.4465)
+            std = (0.2023, 0.1994, 0.2010)
+        transform_list.extend([
+            ResizePad(image_size, pad_value=0),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ])
+        return transforms.Compose(transform_list)
 
     def load_data(self):
         """Load CIFAR-10 dataset."""

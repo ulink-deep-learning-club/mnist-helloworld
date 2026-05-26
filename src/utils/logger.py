@@ -1,6 +1,5 @@
 import logging
 import sys
-from typing import Optional
 
 def setup_logger(name: str = 'mnist_classifier', level: int = logging.INFO) -> logging.Logger:
     """Set up logger."""

@@ -6,14 +6,14 @@
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `--dataset` | str | mnist | Dataset to use (mnist, cifar10, subset_631, subset_1000) |
+| `--dataset` | str | mnist | Dataset to use (mnist, cifar10, subset_631, subset_1000, triplet_mnist, balanced_triplet_mnist, triplet_subset_1000) |
 | `--data-root` | str | ./data | Root directory for datasets |
 
 ### Model Options
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `--model` | str | mynet | Model architecture (lenet, mynet, bottleneck_vit, fpn_vit) |
+| `--model` | str | mynet | Model architecture (lenet, mynet, alexnet, bottleneck_vit, fpn_vit, fpn_vit_tiny/small/large, siamese, siamese_fpn_vit, fpn_moe_vit, ...) |
 | `--num-classes` | int | 10 | Number of output classes |
 
 ### Training Options
@@ -29,7 +29,7 @@
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--learning-rate` | float | 1e-3 | Learning rate |
-| `--optimizer` | str | adamw | Optimizer (adamw, adam, sgd) |
+| `--optimizer` | str | adamw | Optimizer (adamw, adam, sgd, muon, muon_with_aux_adam) |
 | `--scheduler` | str | none | Scheduler (none, step, cosine, plateau, exponential) |
 | `--scheduler-step-size` | int | 10 | Step size for StepLR |
 | `--scheduler-gamma` | float | 0.1 | Decay factor for LR |

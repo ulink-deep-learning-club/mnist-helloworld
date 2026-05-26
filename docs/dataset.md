@@ -169,7 +169,7 @@ List all available dataset names.
 
 ```python
 print(DatasetRegistry.list_available())
-# ['mnist', 'cifar10', 'subset_631', 'subset_1000']
+# ['mnist', 'cifar10', 'subset_631', 'subset_1000', 'triplet_mnist', 'balanced_triplet_mnist', 'triplet_subset_1000']
 ```
 
 #### `DatasetRegistry.create(name: str, **kwargs) -> BaseDataset`

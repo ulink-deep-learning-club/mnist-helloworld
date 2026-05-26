@@ -1,8 +1,6 @@
 import argparse
 from typing import Dict, Any, Optional, List
 
-import yaml
-
 try:
     import yaml
 
@@ -82,6 +80,8 @@ class Config:
             "optimization": {
                 "learning_rate": args.learning_rate,
                 "optimizer": args.optimizer,
+                "weight_decay": 0.01,
+                "momentum": 0.9,
                 "scheduler": args.scheduler,
                 "scheduler_step_size": args.scheduler_step_size,
                 "scheduler_gamma": args.scheduler_gamma,
@@ -90,7 +90,6 @@ class Config:
                 "scheduler_patience": args.scheduler_patience,
                 "scheduler_factor": args.scheduler_factor,
                 "triplet_margin": getattr(args, "triplet_margin", 1.0),
-                "embedding_dim": getattr(args, "embedding_dim", 256),
                 "muon_momentum": args.muon_momentum,
                 "muon_ns_steps": args.muon_ns_steps,
                 "adam_lr": args.adam_lr,
@@ -298,7 +297,7 @@ def create_config_parser() -> argparse.ArgumentParser:
         help="Directory for checkpoints",
     )
     parser.add_argument(
-        "--save-frequency", type=int, default=1, help="Save frequency in epochs"
+        "--save-frequency", type=int, default=10, help="Save frequency in epochs"
     )
 
     # Configuration file

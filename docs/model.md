@@ -101,6 +101,14 @@ Simple CNN optimized for MNIST digit classification.
 model = ModelRegistry.create("mynet", num_classes=10, input_channels=1)
 ```
 
+### AlexNet
+
+AlexNet adapted for smaller inputs (e.g., MNIST, CIFAR-10).
+
+```python
+model = ModelRegistry.create("alexnet", num_classes=10, input_channels=1, input_size=(28, 28))
+```
+
 ### BottleneckViT
 
 Vision Transformer with bottleneck blocks.
@@ -152,6 +160,45 @@ model = ModelRegistry.create(
 | `drop_rate` | 0.2 | Dropout rate |
 | `linear_attention` | True | Use linear attention |
 | `linear_layer_limit` | 4 | Number of layers using linear attention |
+
+#### FPN-ViT Variants
+
+| Variant | embed_dim | depth | num_heads |
+|---------|-----------|-------|-----------|
+| `fpn_vit_tiny` | 96 | 4 | 6 |
+| `fpn_vit_small` | 144 | 6 | 9 |
+| `fpn_vit_large` | 240 | 8 | 15 |
+
+### FeaturePyramidMoEViT (FPN-MoE-ViT)
+
+FPN-ViT with Mixture of Experts (MoE) replacing dense MLPs in transformer blocks.
+Supports the same Tiny/Small/Large variants as FPN-ViT.
+
+```python
+model = ModelRegistry.create("fpn_moe_vit", num_classes=631, input_channels=3, input_size=(64, 64))
+```
+
+### SiameseNetwork
+
+Siamese network for metric learning with triplet loss support.
+
+```python
+model = ModelRegistry.create(
+    "siamese",
+    num_classes=10,
+    input_channels=1,
+    input_size=(28, 28),
+    embedding_dim=128
+)
+```
+
+### SiameseFPNViT / SiameseFPNMoEViT
+
+Siamese variants of FPN-ViT and FPN-MoE-ViT for metric learning.
+
+```python
+model = ModelRegistry.create("siamese_fpn_vit", num_classes=10, input_channels=3, embedding_dim=128)
+```
 
 #### Attention Mechanisms
 
@@ -214,7 +261,11 @@ List all available model names.
 
 ```python
 print(ModelRegistry.list_available())
-# ['lenet', 'mynet', 'bottleneck_vit', 'fpn_vit']
+# ['lenet', 'mynet', 'bottleneck_vit', 'fpn_vit', 'fpn_vit_tiny', 'fpn_vit_small', 'fpn_vit_large',
+#  'siamese', 'siamese_fpn_vit', 'siamese_fpn_vit_tiny', 'siamese_fpn_vit_small', 'siamese_fpn_vit_large',
+#  'fpn_moe_vit', 'fpn_moe_vit_tiny', 'fpn_moe_vit_small', 'fpn_moe_vit_large',
+#  'siamese_fpn_moe_vit', 'siamese_fpn_moe_vit_tiny', 'siamese_fpn_moe_vit_small', 'siamese_fpn_moe_vit_large',
+#  'alexnet']
 ```
 
 #### `ModelRegistry.create(name: str, **kwargs) -> BaseModel`

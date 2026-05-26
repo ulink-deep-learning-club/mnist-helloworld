@@ -13,6 +13,7 @@ from .common import (
 )
 from .lenet import LeNet
 from .mynet import MyNet
+from .alexnet import AlexNet
 from .bottleneck_vit import BottleneckViT
 from .fpn_vit import (
     FeaturePyramidViT,
@@ -51,6 +52,7 @@ __all__ = [
     "DropPath",
     "LeNet",
     "MyNet",
+    "AlexNet",
     "BottleneckViT",
     "FeaturePyramidViT",
     "SiameseFPNViT",

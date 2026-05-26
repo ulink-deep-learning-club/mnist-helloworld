@@ -2,7 +2,7 @@
 
 # Dataset configuration
 dataset:
-  name: mnist  # Options: mnist, cifar10
+  name: mnist  # Options: mnist, cifar10, subset_631, subset_1000, triplet_mnist, balanced_triplet_mnist, triplet_subset_1000
   root: ./data
   download: true
 

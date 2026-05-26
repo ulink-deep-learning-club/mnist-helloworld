@@ -1,30 +1,25 @@
+from typing import Any
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Any
 
 MetricsTracker = None
 try:
     from .base import BaseModel
     from .common import (
-        Attention,
-        FocusedLinearAttention,
         SEBlock,
         ConvBlock,
         C3Module,
-        DropPath,
         InvertedResidual,
     )
     from ..training.metrics import MetricsTracker
-except:
+except ImportError:
     from base import BaseModel
     from common import (
-        Attention,
-        FocusedLinearAttention,
         SEBlock,
         ConvBlock,
         C3Module,
-        DropPath,
         InvertedResidual,
     )
 
@@ -48,18 +43,6 @@ class Expert(nn.Module):
 
 
 class MoEMLP(nn.Module):
-    """
-    Mixture-of-Experts MLP with efficient batched dispatch.
-
-    Instead of gathering per-pair weights and doing T*K tiny bmms,
-    we sort tokens by expert, pad into (E, C, D) tensors, and do
-    just 2 batched matmuls for all experts simultaneously.
-
-    Efficiency gains (B=32, N=257, K=6, E=64, D=80, H=160):
-      Memory:  2.5GB  → ~15MB   (170× reduction)
-      Matmuls: 49,152 tiny bmms → 2 batched bmms  (24,576× fewer launches)
-    """
-
     def __init__(
         self,
         dim,
@@ -83,6 +66,7 @@ class MoEMLP(nn.Module):
             [Expert(dim, expert_hidden, act_layer, drop) for _ in range(num_shared)]
         )
 
+        # ---- KEY CHANGE: Stacked expert weights for parallel computation ----
         self.expert_fc1_weight = nn.Parameter(
             torch.empty(num_routed, expert_hidden, dim)
         )
@@ -101,9 +85,7 @@ class MoEMLP(nn.Module):
 
     def forward(self, x):
         B, N, dim = x.shape
-        T = B * N
-        K = self.num_activated_routed
-        E = self.num_routed
+        T = B * N  # total tokens
 
         # Shared experts (unchanged)
         shared_out = sum(expert(x) for expert in self.shared_experts)
@@ -111,85 +93,263 @@ class MoEMLP(nn.Module):
         # Gating
         gate_logits = self.gate(x)
         gate_scores = F.softmax(gate_logits, dim=-1)  # (B, N, E)
-        top_scores, top_indices = torch.topk(gate_scores, K, dim=-1)  # (B, N, K)
+        top_scores, top_indices = torch.topk(
+            gate_scores, self.num_activated_routed, dim=-1
+        )  # (B, N, K)
 
-        flat_x = x.reshape(T, dim)
+        # ---- PARALLEL DISPATCH (no for-loop) ----
+        flat_x = x.reshape(T, dim)  # (T, D)
+        flat_indices = top_indices.reshape(T, -1)  # (T, K)
+        flat_scores = top_scores.reshape(T, -1)  # (T, K)
 
-        # ============================================================
-        # Efficient dispatch: Sort → Pad → Batched BMM → Scatter
-        # ============================================================
+        # Gather expert weights for each (token, top-k) pair
+        # expert_ids: (T*K,)
+        expert_ids = flat_indices.reshape(-1)
+        # Repeat each token K times
+        token_x = flat_x.unsqueeze(1).expand(-1, self.num_activated_routed, -1)
+        token_x = token_x.reshape(T * self.num_activated_routed, dim)  # (T*K, D)
 
-        # Step 1: Build (token_id, expert_id, score) pairs
-        #   Each token has K pairs (one per selected expert)
-        pair_token = (
-            torch.arange(T, device=x.device).unsqueeze(1).expand(-1, K).reshape(-1)
-        )  # (T*K,)
-        pair_expert = top_indices.reshape(-1)  # (T*K,)
-        pair_score = top_scores.reshape(-1)  # (T*K,)
+        # Batched expert forward: gather per-expert weights
+        w1 = self.expert_fc1_weight[expert_ids]  # (T*K, H, D)
+        b1 = self.expert_fc1_bias[expert_ids]  # (T*K, H)
+        w2 = self.expert_fc2_weight[expert_ids]  # (T*K, D, H)
+        b2 = self.expert_fc2_bias[expert_ids]  # (T*K, D)
 
-        # Step 2: Sort all pairs by expert_id
-        #   This groups tokens belonging to the same expert together
-        order = pair_expert.argsort(stable=True)
-        sorted_token = pair_token[order]  # (T*K,)
-        sorted_expert = pair_expert[order]  # (T*K,)
-        sorted_score = pair_score[order]  # (T*K,)
-        sorted_x = flat_x[sorted_token]  # (T*K, dim)
+        # Forward: two linear layers with activation
+        h = torch.bmm(w1, token_x.unsqueeze(-1)).squeeze(-1) + b1  # (T*K, H)
+        h = self.act(h)
+        h = self.drop(h)
+        out = torch.bmm(w2, h.unsqueeze(-1)).squeeze(-1) + b2  # (T*K, D)
+        out = self.drop(out)
 
-        # Step 3: Compute per-expert token counts and capacity
-        expert_counts = torch.bincount(sorted_expert, minlength=E)  # (E,)
-        C = expert_counts.max().item()  # capacity = max tokens per expert
+        # Weight by gate scores and scatter-add back
+        scores = flat_scores.reshape(-1, 1)  # (T*K, 1)
+        out = out * scores  # (T*K, D)
 
-        if C == 0:
-            # Edge case: no tokens routed (shouldn't happen in practice)
-            routed_out = torch.zeros_like(x)
-        else:
-            # Step 4: Compute each pair's position within its expert group
-            #   e.g., sorted_expert = [0,0,0, 1,1, 2,2,2,2, ...]
-            #         position       = [0,1,2, 0,1, 0,1,2,3, ...]
-            cumsum = torch.zeros(E + 1, device=x.device, dtype=torch.long)
-            cumsum[1:] = expert_counts.cumsum(0)
-            pos = torch.arange(T * K, device=x.device) - cumsum[sorted_expert]
+        # Scatter back to token positions
+        token_indices = torch.arange(T, device=x.device).unsqueeze(1)
+        token_indices = token_indices.expand(-1, self.num_activated_routed)
+        token_indices = token_indices.reshape(-1)  # (T*K,)
 
-            # Step 5: Pad into (E, C, dim) tensors for batched computation
-            #   Padded positions remain zero → zero input → output zeroed by score
-            padded_x = sorted_x.new_zeros(E, C, dim)
-            padded_x[sorted_expert, pos] = sorted_x
-
-            padded_score = sorted_score.new_zeros(E, C, 1)
-            padded_score[sorted_expert, pos, 0] = sorted_score
-
-            # Step 6: Batched expert forward — just 2 bmm calls!
-            #   Shape: (E, C, dim) @ (E, dim, H) → (E, C, H)
-            h = torch.bmm(padded_x, self.expert_fc1_weight.transpose(1, 2))
-            h = h + self.expert_fc1_bias.unsqueeze(1)
-            h = self.act(h)
-            h = self.drop(h)
-
-            #   Shape: (E, C, H) @ (E, H, dim) → (E, C, dim)
-            out = torch.bmm(h, self.expert_fc2_weight.transpose(1, 2))
-            out = out + self.expert_fc2_bias.unsqueeze(1)
-            out = self.drop(out)
-
-            # Weight by gate scores (padded positions have score=0 → zeroed)
-            out = out * padded_score  # (E, C, dim)
-
-            # Step 7: Extract valid outputs and scatter-add back to tokens
-            valid_out = out[sorted_expert, pos]  # (T*K, dim)
-
-            routed_out = flat_x.new_zeros(T, dim)
-            routed_out.scatter_add_(
-                0,
-                sorted_token.unsqueeze(-1).expand(-1, dim),
-                valid_out,
-            )
-            routed_out = routed_out.reshape(B, N, dim)
+        routed_out = torch.zeros(T, dim, device=x.device)
+        routed_out.scatter_add_(0, token_indices.unsqueeze(-1).expand(-1, dim), out)
+        routed_out = routed_out.reshape(B, N, dim)
 
         # Balance loss (vectorized)
-        expert_freq = expert_counts.float() / (T * K)
+        expert_freq = torch.zeros(self.num_routed, device=x.device)
+        expert_freq.scatter_add_(
+            0, expert_ids, torch.ones_like(expert_ids, dtype=torch.float)
+        )
+        expert_freq = expert_freq / (T * self.num_activated_routed)
+
         expert_prob = gate_scores.reshape(T, -1).mean(dim=0)  # (E,)
+
         balance_loss = self.balance_factor * (expert_freq * expert_prob).sum()
 
         return shared_out + routed_out, balance_loss, expert_freq, expert_prob
+
+
+class PatchEmbed(nn.Module):
+    """将 2D 图片展平为 Patch Embeddings"""
+
+    def __init__(self, img_size=64, patch_size=8, in_chans=3, embed_dim=256):
+        super().__init__()
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.grid_size = img_size // patch_size
+        self.num_patches = self.grid_size**2
+        self.proj = nn.Conv2d(
+            in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
+        )
+
+    def forward(self, x):
+        x = self.proj(x)
+        x = x.flatten(2).transpose(1, 2)
+        return x
+
+
+class Attention(nn.Module):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = head_dim**-0.5
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x):
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        x = F.scaled_dot_product_attention(
+            q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0
+        )
+
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
+class LinearAttention(nn.Module):
+    def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0.0, proj_drop=0.0):
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = head_dim**-0.5
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+        self.kernel_fn = nn.ELU()
+
+    def forward(self, x):
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        q = self.kernel_fn(q) + 1
+        k = self.kernel_fn(k) + 1
+
+        q = q * self.scale
+        x = F.scaled_dot_product_attention(
+            q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0
+        )
+
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
+class FocusedLinearAttention(nn.Module):
+    def __init__(
+        self,
+        dim,
+        num_heads=8,
+        qkv_bias=False,
+        attn_drop=0.0,
+        proj_drop=0.0,
+        focusing_factor=3,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scaling = self.head_dim**-0.5
+        self.focusing_factor = focusing_factor
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.proj = nn.Linear(dim, dim)
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        self.dwc = nn.Conv1d(dim, dim, kernel_size=3, padding=1, groups=dim)
+
+    def forward(self, x):
+        B, N, C = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, self.head_dim)
+            .permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv.unbind(0)
+
+        q = F.relu(q) + 1e-6
+        k = F.relu(k) + 1e-6
+
+        q = q / q.sum(dim=-1, keepdim=True)
+        k = k / k.sum(dim=-1, keepdim=True)
+        q = q**self.focusing_factor
+        k = k**self.focusing_factor
+        q = q / q.sum(dim=-1, keepdim=True)
+        k = k / k.sum(dim=-1, keepdim=True)
+
+        kv = torch.einsum("bhnd,bhne->bhde", k, v)
+        z = 1.0 / (torch.einsum("bhnd,bhd->bhn", q, k.sum(dim=2)) + 1e-6)
+        out = torch.einsum("bhnd,bhde,bhn->bhne", q, kv, z)
+
+        out = out.transpose(1, 2).reshape(B, N, C)
+        out = out + self.dwc(out.transpose(1, 2)).transpose(1, 2)
+
+        out = self.proj(out)
+        out = self.proj_drop(out)
+        return out
+
+
+class Mlp(nn.Module):
+    def __init__(
+        self,
+        in_features,
+        hidden_features=None,
+        out_features=None,
+        act_layer=nn.GELU,
+        drop=0.0,
+    ):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
+        return x
+
+
+def drop_path(
+    x: torch.Tensor, drop_prob: float = 1.0, inplace: bool = False
+) -> torch.Tensor:
+    keep_prob = 1 - drop_prob
+    mask_shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+    # remember tuples have the * operator -> (1,) * 3 = (1,1,1)
+    mask: torch.Tensor = x.new_empty(mask_shape).bernoulli_(keep_prob)
+    mask.div_(keep_prob)
+    if inplace:
+        x.mul_(mask)
+    else:
+        x = x * mask
+    return x
+
+
+class DropPath(nn.Module):
+    """
+    DropPath (Stochastic Depth) regularization layer.
+    During training, randomly drops entire residual paths with probability `1-p`.
+     - `p=1` means no dropping (always keep).
+     - `p=0` means always drop (never keep).
+    The remaining paths are scaled by `1/(1-p)` to maintain expected feature magnitudes.
+    This encourages the model to learn more robust representations and can improve generalization.
+    Reference: https://arxiv.org/abs/1603.09382
+
+    Implementation from: https://github.com/FrancescoSaverioZuppichini/DropPath
+    """
+
+    def __init__(self, p: float = 0.5, inplace: bool = False):
+        super().__init__()
+        self.p = p
+        self.inplace = inplace
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if self.training and self.p > 0:
+            x = drop_path(x, self.p, self.inplace)
+        return x
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(p={self.p})"
 
 
 class Block(nn.Module):
@@ -247,6 +407,102 @@ class Block(nn.Module):
         mlp_out, aux_loss, expert_freq, expert_prob = self.mlp(self.norm2(x))
         x = x + mlp_out
         return x, aux_loss, expert_freq, expert_prob
+
+
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation block."""
+
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channels, channels // reduction, bias=False),
+            nn.SiLU(inplace=True),
+            nn.Linear(channels // reduction, channels, bias=False),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+
+class ConvBlock(nn.Module):
+    """Standard Conv Block (Conv + BatchNorm + Activation)."""
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=1,
+        stride=1,
+        padding=0,
+        groups=1,
+        act=True,
+    ):
+        super().__init__()
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            groups=groups,
+            bias=False,
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = nn.SiLU(inplace=True) if act else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+
+class Bottleneck(nn.Module):
+    """YOLOv5 Bottleneck block with optional shortcut."""
+
+    def __init__(
+        self, in_channels, out_channels, shortcut=True, groups=1, expansion=0.5
+    ):
+        super().__init__()
+        hidden_channels = int(out_channels * expansion)
+        self.cv1 = ConvBlock(in_channels, hidden_channels, 1, 1)
+        self.cv2 = ConvBlock(hidden_channels, out_channels, 3, 1, 1, groups=groups)
+        self.add = shortcut and in_channels == out_channels
+
+    def forward(self, x):
+        return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
+
+
+class C3Module(nn.Module):
+    """YOLOv5 C3 Module (Cross Stage Partial Network)."""
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        num_bottlenecks=3,
+        shortcut=True,
+        groups=1,
+        expansion=0.5,
+    ):
+        super().__init__()
+        hidden_channels = int(out_channels * expansion)
+        self.cv1 = ConvBlock(in_channels, hidden_channels, 1, 1)
+        self.cv2 = ConvBlock(in_channels, hidden_channels, 1, 1)
+        self.cv3 = ConvBlock(2 * hidden_channels, out_channels, 1, 1)
+        self.m = nn.Sequential(
+            *[
+                Bottleneck(
+                    hidden_channels, hidden_channels, shortcut, groups, expansion
+                )
+                for _ in range(num_bottlenecks)
+            ]
+        )
+
+    def forward(self, x):
+        return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), dim=1))
 
 
 class VisionTransformer(nn.Module):
@@ -525,93 +781,6 @@ class PyramidFeatureExtractor(nn.Module):
             return p1, p2, p3
 
 
-class PyramidFeatureExtractorInvertedResidual(nn.Module):
-    """InvertedResidual-based Pyramid（替换 C3）"""
-
-    def __init__(
-        self,
-        input_channels=24,
-        lateral_channels_list=[32, 64, 128],
-        out_dim=64,
-        fusion_mode="32x32",
-    ):
-        super().__init__()
-        self.fusion_mode = fusion_mode
-
-        # Stem: 轻量入口
-        self.stem = nn.Sequential(
-            nn.Conv2d(
-                input_channels,
-                lateral_channels_list[0],
-                3,
-                stride=2,
-                padding=1,
-                bias=False,
-            ),
-            nn.BatchNorm2d(lateral_channels_list[0]),
-            nn.SiLU(inplace=True),
-        )
-
-        # Stage 1: 32×32
-        ch0 = lateral_channels_list[0]
-        self.stage1 = nn.Sequential(
-            InvertedResidual(ch0, ch0, stride=1, expand_ratio=2.0),
-            InvertedResidual(ch0, ch0, stride=1, expand_ratio=2.0),
-        )
-
-        # Stage 2: 16×16
-        ch1 = lateral_channels_list[1]
-        self.stage2 = nn.Sequential(
-            InvertedResidual(ch0, ch1, stride=2, expand_ratio=2.5),
-            InvertedResidual(ch1, ch1, stride=1, expand_ratio=2.5),
-        )
-
-        # Stage 3: 8×8
-        ch2 = lateral_channels_list[2]
-        self.stage3 = nn.Sequential(
-            InvertedResidual(ch1, ch2, stride=2, expand_ratio=3.0),
-            InvertedResidual(ch2, ch2, stride=1, expand_ratio=3.0),
-        )
-
-        # Lateral projections (不需要额外 SE，InvertedResidual 内部已有)
-        if fusion_mode == "32x32":
-            self.lateral1 = nn.Conv2d(ch0, out_dim, 1, bias=False)
-            self.lateral2 = nn.Sequential(
-                nn.Conv2d(ch1, out_dim, 1, bias=False),
-                nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False),
-            )
-            self.lateral3 = nn.Sequential(
-                nn.Conv2d(ch2, out_dim, 1, bias=False),
-                nn.Upsample(scale_factor=4, mode="bilinear", align_corners=False),
-            )
-            self.fusion = nn.Sequential(
-                nn.Conv2d(out_dim * 3, out_dim, 1, bias=False),
-                nn.BatchNorm2d(out_dim),
-                nn.SiLU(inplace=True),
-            )
-        else:
-            self.lateral1 = nn.Conv2d(ch0, out_dim, 1, bias=False)
-            self.lateral2 = nn.Conv2d(ch1, out_dim, 1, bias=False)
-            self.lateral3 = nn.Conv2d(ch2, out_dim, 1, bias=False)
-
-    def forward(self, x):
-        x = self.stem(x)
-        c1 = self.stage1(x)  # 32×32
-        c2 = self.stage2(c1)  # 16×16
-        c3 = self.stage3(c2)  # 8×8
-
-        p1 = self.lateral1(c1)
-        p2 = self.lateral2(c2)
-        p3 = self.lateral3(c3)
-
-        if self.fusion_mode == "32x32":
-            return self.fusion(torch.cat([p1, p2, p3], dim=1)), c2
-            #                                                    ↑
-            #                                    返回中间特征供局部池化
-        else:
-            return (p1, p2, p3), c2
-
-
 class FeaturePyramidMoEViT(BaseModel):
     """Vision Transformer with MoE MLP for Chinese Character Recognition."""
 
@@ -659,7 +828,6 @@ class FeaturePyramidMoEViT(BaseModel):
         moe_num_activated_routed=6,
         moe_expert_ratio=0.25,
         moe_balance_factor=0.01,
-        num_patches_per_scale=[1024, 256, 64],
         **kwargs,
     ):
         super().__init__(
@@ -680,11 +848,11 @@ class FeaturePyramidMoEViT(BaseModel):
             nn.SiLU(inplace=True),
         )
 
-        self.pyramid_extractor = PyramidFeatureExtractorInvertedResidual(
+        self.pyramid_extractor = PyramidFeatureExtractor(
             input_channels=preprocess_channels,
             lateral_channels_list=lateral_channels_list,
             out_dim=fpn_out_channels,
-            # num_bottlenecks=num_bottlenecks,
+            num_bottlenecks=num_bottlenecks,
             fusion_mode=fpn_mode,
         )
 
@@ -733,7 +901,7 @@ class FeaturePyramidMoEViT(BaseModel):
             self.vit = MultiScaleVisionTransformer(
                 embed_dim=self.embed_dim,
                 num_scales=3,
-                num_patches_per_scale=num_patches_per_scale,
+                num_patches_per_scale=[1024, 256, 64],
                 depth=depth,
                 num_heads=num_heads,
                 mlp_ratio=mlp_ratio,
@@ -779,7 +947,7 @@ class FeaturePyramidMoEViT(BaseModel):
     def forward(self, x):
         x = self.image_preprocess(x)
 
-        features, _ = self.pyramid_extractor(x)
+        features = self.pyramid_extractor(x)
 
         if self.fpn_mode == "32x32":
             x = self.conv_bottleneck(features)
@@ -875,11 +1043,11 @@ class SiameseFPNMoEViT(BaseModel):
             nn.SiLU(inplace=True),
         )
 
-        self.pyramid_extractor = PyramidFeatureExtractorInvertedResidual(
+        self.pyramid_extractor = PyramidFeatureExtractor(
             input_channels=preprocess_channels,
             lateral_channels_list=lateral_channels_list,
             out_dim=fpn_out_channels,
-            # num_bottlenecks=num_bottlenecks,
+            num_bottlenecks=num_bottlenecks,
             fusion_mode=fpn_mode,
         )
 
@@ -975,7 +1143,7 @@ class SiameseFPNMoEViT(BaseModel):
     def forward(self, x):
         x = self.image_preprocess(x)
 
-        features, _ = self.pyramid_extractor(x)
+        features = self.pyramid_extractor(x)
 
         if self.fpn_mode == "32x32":
             x = self.conv_bottleneck(features)
@@ -1007,17 +1175,18 @@ class SiameseFPNMoEViT(BaseModel):
 
 
 class ModelVariant:
-    """Model variant configurations for different parameter budgets."""
-
     TINY = {
         "preprocess_channels": 16,
         "fpn_out_channels": 48,
-        "embed_dim": 96,
-        "depth": 2,
+        "embed_dim": 64,
+        "depth": 3,
         "num_heads": 4,
         "lateral_channels": [24, 48, 96],
-        "mlp_ratio": 2.0,
-        "num_bottlenecks": 2,
+        "num_bottlenecks": 1,
+        "drop_rate": 0.1,
+        "linear_attention": False,
+        "linear_layer_limit": 0,
+        # MoE: minimal — barely worth having
         "moe_num_shared": 1,
         "moe_num_routed": 4,
         "moe_num_activated_routed": 1,
@@ -1026,59 +1195,60 @@ class ModelVariant:
     }
 
     SMALL = {
-        # ===== 保持 TINY 的计算骨架 =====
-        "preprocess_channels": 16,
+        "preprocess_channels": 24,
+        "fpn_out_channels": 64,
         "embed_dim": 128,
-        "depth": 2,
-        "num_heads": 2,  # ← 修复! head_dim=32
-        "lateral_channels": [24, 48, 96],
+        "depth": 4,
+        "num_heads": 8,  # head_dim=16
+        "lateral_channels": [32, 64, 128],
         "num_bottlenecks": 2,
-        # ===== MoE 杠杆：用参数换容量 =====
-        "moe_num_shared": 1,  # 减少 shared 省计算
-        "moe_num_routed": 16,  # ← 关键：从 4 → 48
+        "drop_rate": 0.15,
+        "linear_attention": False,
+        "linear_layer_limit": 0,
+        # MoE: moderate specialization
+        "moe_num_shared": 1,  # (was 2)
+        "moe_num_routed": 8,
         "moe_num_activated_routed": 2,
-        "moe_expert_ratio": 0.5,
+        "moe_expert_ratio": 0.5,  # half-capacity (was 0.25)
         "moe_balance_factor": 0.05,
-        # ===== 减少 tokens 进一步省计算 =====
-        "fpn_mode": "multiscale",
-        # 去掉 32×32 scale，只保留 16×16 + 8×8
-        "num_patches_per_scale": [256, 64],  # 320 tokens
     }
 
     BASE = {
-        "preprocess_channels": 24,
-        "fpn_out_channels": 112,
+        "preprocess_channels": 32,
+        "fpn_out_channels": 96,
         "embed_dim": 128,
         "depth": 6,
-        "num_heads": 8,
-        "lateral_channels": [56, 112, 224],
-        "mlp_ratio": 3.0,
-        "num_bottlenecks": 3,
-        "moe_num_shared": 2,
-        "moe_num_routed": 24,
-        "moe_num_activated_routed": 4,
-        "moe_expert_ratio": 0.5,
+        "num_heads": 8,  # head_dim=16
+        "lateral_channels": [48, 96, 192],
+        "num_bottlenecks": 2,
+        "drop_rate": 0.2,
+        "linear_attention": False,
+        "linear_layer_limit": 0,
+        # MoE: strong specialization
+        "moe_num_shared": 1,  # (was 2)
+        "moe_num_routed": 8,  # (was 16 — halved)
+        "moe_num_activated_routed": 2,  # (was 4 — halved)
+        "moe_expert_ratio": 1.0,  # FULL capacity (was 0.25 ✗)
         "moe_balance_factor": 0.1,
     }
 
     LARGE = {
-        # ===== 保持 TINY 的计算骨架 =====
-        "preprocess_channels": 32,
+        "preprocess_channels": 40,
+        "fpn_out_channels": 128,
         "embed_dim": 192,
-        "depth": 2,
-        "num_heads": 2,  # ← 修复! head_dim=32
-        "lateral_channels": [24, 48, 96],
-        "num_bottlenecks": 2,
-        # ===== MoE 杠杆：用参数换容量 =====
-        "moe_num_shared": 1,  # 减少 shared 省计算
-        "moe_num_routed": 48,  # ← 关键：从 4 → 48
-        "moe_num_activated_routed": 2,
-        "moe_expert_ratio": 0.5,
-        "moe_balance_factor": 0.05,
-        # ===== 减少 tokens 进一步省计算 =====
-        "fpn_mode": "multiscale",
-        # 去掉 32×32 scale，只保留 16×16 + 8×8
-        "num_patches_per_scale": [256, 64],  # 320 tokens
+        "depth": 8,
+        "num_heads": 8,  # head_dim=24
+        "lateral_channels": [64, 128, 256],
+        "num_bottlenecks": 3,
+        "drop_rate": 0.25,
+        "linear_attention": False,
+        "linear_layer_limit": 0,
+        # MoE: maximum routing diversity
+        "moe_num_shared": 1,  # (was 4 — reduced)
+        "moe_num_routed": 16,  # (was 32 — halved)
+        "moe_num_activated_routed": 4,  # (was 6)
+        "moe_expert_ratio": 0.5,  # half-capacity per expert
+        "moe_balance_factor": 0.1,
     }
 
 
@@ -1096,9 +1266,11 @@ def create_fpn_moe_vit(variant="base", num_classes=631, **kwargs):
         mlp_ratio=config.get("mlp_ratio", 4.0),
         lateral_channels_list=config.get("lateral_channels"),
         num_bottlenecks=config.get("num_bottlenecks", 3),
+        drop_rate=config.get("drop_rate", 0.1),
+        linear_attention=config.get("linear_attention", True),
+        linear_layer_limit=config.get("linear_layer_limit", 4),
         num_classes=num_classes,
-        fpn_mode=config.get("fpn_mode", "multiscale"),
-        num_patches_per_scale=config.get("num_patches_per_scale", None),
+        fpn_mode=config.get("fpn_mode", "32x32"),
         moe_num_shared=config.get("moe_num_shared", 1),
         moe_num_routed=config.get("moe_num_routed", 8),
         moe_num_activated_routed=config.get("moe_num_activated_routed", 2),
@@ -1167,7 +1339,7 @@ class FeaturePyramidMoEViTSmall(FeaturePyramidMoEViT):
         super().__init__(
             input_channels=config.get("input_channels", 3),
             preprocess_channels=config["preprocess_channels"],
-            # fpn_out_channels=config["fpn_out_channels"],
+            fpn_out_channels=config["fpn_out_channels"],
             embed_dim=config["embed_dim"],
             depth=config["depth"],
             num_heads=config["num_heads"],
@@ -1298,29 +1470,21 @@ if __name__ == "__main__":
     print("Testing FPN-MoE-ViT:")
     print("=" * 80)
     model = FeaturePyramidMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
-    summary(
-        model,
-        input_size=(1, 3, 64, 64),
-        col_names=["input_size", "output_size", "num_params", "mult_adds"],
-    )
+    summary(model, input_size=(1, 3, 64, 64))
 
     print("\n" + "=" * 80)
     print("Testing SiameseFPNMoEViT:")
     print("=" * 80)
-    # model = SiameseFPNMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
-    # summary(
-    #     model,
-    #     input_size=(1, 3, 64, 64),
-    #     col_names=["input_size", "output_size", "num_params", "mult_adds"],
-    # )
+    model = SiameseFPNMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
+    summary(model, input_size=(1, 3, 64, 64))
 
-    # print("\n" + "=" * 80)
-    # print("Testing forward pass (returns aux_loss):")
-    # print("=" * 80)
-    # model = FeaturePyramidMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
-    # x = torch.randn(2, 3, 64, 64)
-    # output, aux_loss, expert_freq, expert_prob = model(x)
-    # print(f"Output shape: {output.shape}")
-    # print(f"Aux loss: {aux_loss.item():.6f}")
-    # print(f"Expert freq: {expert_freq}")
-    # print(f"Expert prob: {expert_prob}")
+    print("\n" + "=" * 80)
+    print("Testing forward pass (returns aux_loss):")
+    print("=" * 80)
+    model = FeaturePyramidMoEViT(moe_num_routed=8, moe_num_activated_routed=2)
+    x = torch.randn(2, 3, 64, 64)
+    output, aux_loss, expert_freq, expert_prob = model(x)
+    print(f"Output shape: {output.shape}")
+    print(f"Aux loss: {aux_loss.item():.6f}")
+    print(f"Expert freq: {expert_freq}")
+    print(f"Expert prob: {expert_prob}")

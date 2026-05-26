@@ -23,12 +23,15 @@ python train.py --fork exp1
 
 ## Available Datasets
 
-| Dataset | Classes | Input Channels | Image Size |
-|---------|---------|----------------|------------|
-| mnist | 10 | 1 | 28x28 |
-| cifar10 | 10 | 3 | 32x32 |
-| subset_631 | 631 | 3 | 64x64 |
-| subset_1000 | 1000 | 3 | 64x64 |
+| Dataset | Classes | Input Channels (default) | Image Size |
+|---------|---------|--------------------------|------------|
+| mnist | 10 | 1 | 28×28 |
+| cifar10 | 10 | 3 | 32×32 |
+| subset_631 | 631 | 1 | 64×64 |
+| subset_1000 | 1000 | 1 | 64×64 |
+| triplet_mnist | 10 | 1 | 28×28 |
+| balanced_triplet_mnist | 10 | 1 | 28×28 |
+| triplet_subset_1000 | 1000 | 1 | 64×64 |
 
 ## Available Models
 
@@ -36,8 +39,17 @@ python train.py --fork exp1
 |-------|-------------|
 | lenet | Classic LeNet-5 architecture |
 | mynet | Simple CNN for MNIST |
+| alexnet | AlexNet adapted for smaller inputs |
 | bottleneck_vit | Vision Transformer with bottleneck blocks |
 | fpn_vit | Feature Pyramid Network with ViT |
+| fpn_vit_tiny / fpn_vit_small / fpn_vit_large | FPN-ViT variants (Tiny/Small/Large) |
+| siamese | Siamese network for metric learning |
+| siamese_fpn_vit | Siamese + FPN-ViT |
+| siamese_fpn_vit_tiny / siamese_fpn_vit_small / siamese_fpn_vit_large | Siamese FPN-ViT variants |
+| fpn_moe_vit | FPN-ViT with Mixture of Experts |
+| fpn_moe_vit_tiny / fpn_moe_vit_small / fpn_moe_vit_large | FPN-MoE-ViT variants |
+| siamese_fpn_moe_vit | Siamese + FPN-MoE-ViT |
+| siamese_fpn_moe_vit_tiny / siamese_fpn_moe_vit_small / siamese_fpn_moe_vit_large | Siamese FPN-MoE-ViT variants |
 
 ## Features
 

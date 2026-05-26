@@ -586,7 +586,9 @@ def main():
         logger.info(f"Training time: {results['training_time']:.2f} seconds")
 
         # Save final model
-        final_model_path = experiment_manager.checkpoints_dir + "/final_model.pth"
+        final_model_path = os.path.join(
+            experiment_manager.checkpoints_dir, "final_model.pth"
+        )
         torch.save(model.state_dict(), final_model_path)
         logger.info(f"Final model saved as {final_model_path}")
 
@@ -594,7 +596,9 @@ def main():
         logger.info("Training interrupted by user")
 
         # Save interrupted model
-        interrupted_path = experiment_manager.checkpoints_dir + "/interrupted_model.pth"
+        interrupted_path = os.path.join(
+            experiment_manager.checkpoints_dir, "interrupted_model.pth"
+        )
         torch.save(model.state_dict(), interrupted_path)
         logger.info(f"Interrupted model saved as {interrupted_path}")
 

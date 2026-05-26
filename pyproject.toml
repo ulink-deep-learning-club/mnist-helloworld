@@ -32,3 +32,9 @@ muon-optimizer = { git = "https://github.com/KellerJordan/Muon" }
 name = "pytorch-cu124"
 url = "https://download.pytorch.org/whl/cu124"
 explicit = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.14",
+]
