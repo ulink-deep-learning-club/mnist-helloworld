@@ -2,6 +2,16 @@ import torchvision
 import torchvision.transforms as transforms
 from .base import ClassificationDataset
 from .utils import ResizePad
+import warnings
+from numpy.exceptions import VisibleDeprecationWarning
+
+# Suppress the warning
+# VisibleDeprecationWarning: dtype(): align should be passed as Python or NumPy boolean but got `align=0`. Did you mean to pass a tuple to create a subarray type? (Deprecated NumPy 2.4)
+warnings.filterwarnings(
+    "ignore",
+    category=VisibleDeprecationWarning,
+    message=".*align should be passed as Python or NumPy boolean.*"
+)
 
 
 class CIFARDataset(ClassificationDataset):

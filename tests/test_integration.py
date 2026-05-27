@@ -106,11 +106,14 @@ class TestFullPipeline:
             assert os.path.exists(os.path.join(em.checkpoints_dir, "best_model.pt"))
             assert os.path.exists(em.log_file)
 
-            # Log file has correct content
+            # Log file has correct content (5 comment lines + 1 CSV header + 3 epoch lines)
             with open(em.log_file) as f:
                 lines = f.readlines()
-            assert len(lines) == 4  # header + 3 epochs
-            assert lines[0].startswith("epoch")
+            assert len(lines) == 9
+            # Comment lines start with "#"
+            assert all(l.startswith("#") for l in lines[:5])
+            # CSV header is the 6th line
+            assert lines[5].startswith("epoch")
 
 
 # ========================================================================

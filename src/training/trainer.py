@@ -132,13 +132,69 @@ class Trainer:
         return "classification"
 
     def _init_log_file(self):
-        """Initialize training log file with headers."""
+        """Initialize training log file with metadata headers and CSV header."""
         log_path = self.experiment_manager.log_file
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+        model_name = getattr(self.model, "_orig_mod", self.model).__class__.__name__
+        ds_name = self.dataset.__class__.__name__ if self.dataset else "unknown"
+        opt_name = self.optimizer.__class__.__name__
+        crit_name = self.criterion.__class__.__name__
+
+        extra_cols = []
+        if self.paradigm == "triplet":
+            extra_cols.extend(["pos_dist", "neg_dist"])
+        if self.is_moe:
+            extra_cols.append("balance_loss")
+
+        columns = (
+            ["epoch", "train_loss", "train_acc", "val_loss", "val_acc",
+             "best_acc", "lr", "epoch_time(s)", "train_it/s", "val_it/s"]
+            + extra_cols
+        )
+
         with open(log_path, "w") as f:
-            f.write(
-                "epoch, train_loss, train_acc, val_loss, val_acc, lr, epoch_time(s), train_it/s, val_it/s\n"
-            )
+            f.write(f"# experiment: {self.experiment_manager.experiment_dir}\n")
+            f.write(f"# model: {model_name}, dataset: {ds_name}\n")
+            f.write(f"# optimizer: {opt_name}, criterion: {crit_name}\n")
+            f.write(f"# device: {self.device}, amp: {self.use_amp}\n")
+            f.write(f"# paradigm: {self.paradigm}, moe: {self.is_moe}\n")
+            f.write(", ".join(columns) + "\n")
+
+    def _parse_csv(self, lines: list[str]) -> tuple[dict, int]:
+        """Parse CSV lines and return (history_updates, last_epoch)."""
+        history = {
+            "train_loss": [],
+            "train_accuracy": [],
+            "val_loss": [],
+            "val_accuracy": [],
+            "learning_rate": [],
+            "epoch_time": [],
+            "train_speed": [],
+            "val_speed": [],
+        }
+        last_epoch = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 9:
+                continue
+            try:
+                history["train_loss"].append(float(parts[1]))
+                history["train_accuracy"].append(float(parts[2]))
+                history["val_loss"].append(float(parts[3]))
+                history["val_accuracy"].append(float(parts[4]))
+                history["learning_rate"].append(float(parts[5]))
+                epoch_time_str = parts[7].replace("s", "")
+                history["epoch_time"].append(float(epoch_time_str))
+                history["train_speed"].append(float(parts[8]))
+                history["val_speed"].append(float(parts[9]))
+                last_epoch = int(parts[0])
+            except (ValueError, IndexError):
+                continue
+        return history, last_epoch
 
     def load_history_from_log(self) -> int:
         """Load training history from existing log file. Returns last epoch number."""
@@ -146,27 +202,12 @@ class Trainer:
         if not os.path.exists(log_path):
             return 0
 
-        last_epoch = 0
         with open(log_path, "r") as f:
             lines = f.readlines()
-            # Skip header
-            for line in lines[1:]:
-                parts = line.strip().split(",")
-                if len(parts) >= 9:
-                    try:
-                        self.history["train_loss"].append(float(parts[1].strip()))
-                        self.history["train_accuracy"].append(float(parts[2].strip()))
-                        self.history["val_loss"].append(float(parts[3].strip()))
-                        self.history["val_accuracy"].append(float(parts[4].strip()))
-                        self.history["learning_rate"].append(float(parts[5].strip()))
-                        self.history["epoch_time"].append(
-                            float(parts[6].strip().replace("s", ""))
-                        )
-                        self.history["train_speed"].append(float(parts[7].strip()))
-                        self.history["val_speed"].append(float(parts[8].strip()))
-                        last_epoch = int(parts[0].strip())
-                    except (ValueError, IndexError):
-                        continue
+
+        parsed, last_epoch = self._parse_csv(lines)
+        for key in self.history:
+            self.history[key].extend(parsed.get(key, []))
         return last_epoch
 
     def _log_epoch(
@@ -181,18 +222,33 @@ class Trainer:
     ):
         """Log epoch results to file."""
         log_path = self.experiment_manager.log_file
+
+        vals = [
+            f"{epoch:4d}",
+            f"{train_metrics['loss']:8.4f}",
+            f"{train_metrics['accuracy']:6.2f}",
+            f"{val_metrics['loss']:8.4f}",
+            f"{val_metrics['accuracy']:6.2f}",
+            f"{self.best_accuracy:6.2f}",
+            f"{lr:.2e}",
+            f"{epoch_time:6.1f}s",
+            f"{train_speed:6.2f}",
+            f"{val_speed:6.2f}",
+        ]
+
+        if self.paradigm == "triplet":
+            vals.append(f"{train_metrics.get('pos_dist', 0):.4f}")
+            vals.append(f"{train_metrics.get('neg_dist', 0):.4f}")
+
+        if self.is_moe:
+            moe_balance = getattr(self, "train_moe_metrics", None)
+            if moe_balance:
+                vals.append(f"{moe_balance.get_average_balance_loss():.6f}")
+            else:
+                vals.append("-")
+
         with open(log_path, "a") as f:
-            f.write(
-                f"{epoch:4d}, "
-                f"{train_metrics['loss']:8.4f}, "
-                f"{train_metrics['accuracy']:6.2f}, "
-                f"{val_metrics['loss']:8.4f}, "
-                f"{val_metrics['accuracy']:6.2f}, "
-                f"{lr:.2e}, "
-                f"{epoch_time:6.1f}s, "
-                f"{train_speed:6.2f}, "
-                f"{val_speed:6.2f}\n"
-            )
+            f.write(", ".join(vals) + "\n")
 
     def train_epoch(self, epoch: int) -> tuple[Dict[str, float], float]:
         """Train for one epoch. Returns metrics and speed (it/s)."""

@@ -165,8 +165,10 @@ class TestClassificationFullTrain:
             assert os.path.exists(em.log_file)
             with open(em.log_file) as f:
                 lines = f.readlines()
-            assert len(lines) == 3  # header + 2 epochs
-            assert lines[0].startswith("epoch")
+            # 5 comment lines + 1 CSV header + 2 epoch lines = 8
+            assert len(lines) == 8
+            assert all(l.startswith("#") for l in lines[:5])
+            assert lines[5].startswith("epoch")
 
 
 # ---------- early stopping ----------

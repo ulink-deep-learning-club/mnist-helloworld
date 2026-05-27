@@ -644,9 +644,38 @@ def main():
             )
             raise
 
-    # Start training
+    # ── Pre-training summary ──
+    summary_lines = [
+        "=" * 72,
+        f"  Model:         {config.model['name']} ({model.__class__.__name__})",
+        f"  Dataset:       {config.dataset['name']} ({dataset.num_classes} classes, "
+        f"{dataset.input_channels}ch, {dataset.input_size[0]}x{dataset.input_size[1]})",
+        f"  Device:        {device}",
+        f"  Epochs:        {config.training['epochs']}  (start_epoch={start_epoch})",
+        f"  Batch size:    {config.training['batch_size']}",
+        f"  Workers:       {train_workers} train / {val_workers} val",
+        f"  Optimizer:     {', '.join(opt_parts)}",
+    ]
+    if scheduler:
+        summary_lines.append(f"  Scheduler:     {scheduler_desc}")
+    if args.mixed_precision and device.type == "cuda":
+        summary_lines.append(f"  Mixed prec:    FP16")
+    if args.freeze:
+        summary_lines.append(f"  Frozen layers: {len(args.freeze)} spec(s)")
     if args.patience > 0:
-        logger.info(f"Early stopping enabled with patience={args.patience}")
+        summary_lines.append(f"  Early stop:    patience={args.patience}")
+    if annealing_manager is not None:
+        summary_lines.append(f"  Annealing:     enabled")
+    if getattr(args, "compile", False):
+        summary_lines.append(f"  torch.compile: enabled")
+    num_params = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    summary_lines.append(f"  Parameters:    {num_params:,} total / {trainable:,} trainable")
+    summary_lines.append(f"  Output dir:    {experiment_manager.experiment_dir}")
+    summary_lines.append("=" * 72)
+
+    for line in summary_lines:
+        logger.info(line)
 
     try:
         results = trainer.train(
