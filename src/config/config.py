@@ -48,6 +48,7 @@ class Config:
         self.training = config_dict.get("training", {})
         self.optimization = config_dict.get("optimization", {})
         self.checkpointing = config_dict.get("checkpointing", {})
+        self.annealing = config_dict.get("annealing", [])
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "Config":
@@ -100,6 +101,15 @@ class Config:
                 "save_frequency": args.save_frequency,
             },
         }
+
+        # Handle --annealing CLI flag
+        annealing_val = getattr(args, "annealing", None)
+        if annealing_val is not None:
+            if annealing_val != -1:
+                config_dict["annealing"] = {"epochs": annealing_val}
+            else:
+                config_dict["annealing"] = {}
+
         return cls(config_dict)
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -347,11 +357,43 @@ def create_config_parser() -> argparse.ArgumentParser:
         help="Early stopping patience (0 to disable). Stops training if no improvement after N epochs.",
     )
 
+    # Parameter annealing
+    parser.add_argument(
+        "--annealing",
+        nargs="?",
+        const=-1,
+        default=None,
+        type=int,
+        metavar="EPOCHS",
+        help="Enable parameter annealing (tau 0→1 for model.on_annealing_step). "
+             "Optionally specify number of epochs to anneal over, e.g. --annealing 20",
+    )
+
+    # Reproducibility
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility (torch, numpy, random)",
+    )
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Enable deterministic algorithms in PyTorch (may reduce performance)",
+    )
+
     # Mixed precision training
     parser.add_argument(
         "--mixed-precision",
         action="store_true",
         help="Enable mixed precision training (FP16) for faster training on compatible GPUs",
+    )
+
+    # torch.compile
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable torch.compile for model optimization (requires PyTorch 2.x)",
     )
 
     return parser

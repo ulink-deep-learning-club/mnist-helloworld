@@ -18,6 +18,28 @@ class BaseModel(nn.Module, ABC):
         self.input_channels = input_channels
 
     @property
+    def need_annealing(self) -> bool:
+        """Whether this model participates in annealing.
+
+        Override to return True in subclasses that override
+        :meth:`on_annealing_step` to update internal parameters.
+        """
+        return False
+
+    def on_annealing_step(self, tau: float) -> None:
+        """Called by the Trainer at the start of each epoch when annealing
+        is enabled.  ``tau`` progresses linearly from 0 to 1 over the
+        annealing window.  Override this to map tau to model-internal
+        parameters such as temperature, aux_loss_weight, etc.
+
+        Example::
+
+            def on_annealing_step(self, tau):
+                self.temperature = 1.0 + 3.0 * (1.0 - tau)
+        """
+        pass
+
+    @property
     @abstractmethod
     def model_type(self) -> str:
         """Model paradigm type. Must be one of MODEL_TYPES."""

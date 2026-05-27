@@ -45,6 +45,9 @@ A refactored, modular deep learning framework that supports multiple datasets, m
 - **Optimizers**: AdamW, Adam, SGD, Muon, MuonWithAuxAdam
 - **Learning Rate Schedulers**: Step, Cosine, Plateau, Exponential
 - **Mixed Precision Training**: FP16 support for faster training
+- **torch.compile**: Model optimization via ``torch.compile`` (PyTorch 2.x+)
+- **Parameter Annealing**: Linearly anneal a reference value (tau 0→1) for model-internal hyperparameters such as temperature or aux_loss_weight
+- **Deterministic Mode**: Fully reproducible training via seed + deterministic algorithms
 - **Early Stopping**: Configurable patience
 - **Checkpoint Management**: Auto-save, resume, and fork experiments
 - **Siamese/Triplet Loss**: Support for metric learning
@@ -76,7 +79,8 @@ mnist-helloworld/
 │   │   ├── trainer.py           # Main trainer
 │   │   ├── metrics.py           # Metrics tracking
 │   │   ├── checkpoint.py        # Checkpoint management
-│   │   └── experiment.py        # Experiment manager
+│   │   ├── experiment.py        # Experiment manager
+│   │   └── annealing.py         # Parameter annealing framework
 │   ├── config/                  # Configuration management
 │   │   └── config.py            # Config parser and loader
 │   └── utils/                   # Utilities
@@ -124,6 +128,28 @@ Freeze specific layers:
 
 ```bash
 python train.py --freeze "2-1" --freeze "features"
+```
+
+Enable torch.compile for model optimization (PyTorch 2.x+):
+
+```bash
+python train.py --compile
+```
+
+Reproducible training with seed and deterministic mode:
+
+```bash
+python train.py --seed 42 --deterministic
+```
+
+Enable parameter annealing (see [Parameter Annealing](#parameter-annealing) for details):
+
+```bash
+# Anneal over the entire training duration
+python train.py --annealing
+
+# Anneal over the first 20 epochs only
+python train.py --annealing 20
 ```
 
 Full list of options:
@@ -185,6 +211,10 @@ optimization:
   adam_lr: 3e-4
   adam_betas: [0.9, 0.95]
 
+# Annealing configuration (optional)
+# annealing:
+#   epochs: 20
+
 # Checkpointing configuration
 checkpointing:
   checkpoint_dir: checkpoints
@@ -210,6 +240,18 @@ checkpointing:
 | `--num-workers` | Data loading workers | `4` |
 | `--reapply-transforms` | Reapply transforms each epoch | `false` |
 | `--mixed-precision` | Enable FP16 training | `false` |
+| `--compile` | Enable torch.compile for model optimization | `false` |
+
+#### Parameter Annealing
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--annealing` | Enable parameter annealing; optionally specify epochs (e.g. `--annealing 20`) | disabled |
+
+#### Reproducibility
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--seed` | Random seed (torch, numpy, random) | - |
+| `--deterministic` | Enable deterministic algorithms (may reduce performance) | `false` |
 
 #### Optimization
 | Option | Description | Default |
@@ -261,6 +303,60 @@ checkpointing:
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--patience` | Early stopping patience | `0` |
+
+## Parameter Annealing
+
+The framework provides a generic mechanism to anneal model-internal hyperparameters over the course of training. It computes a single reference value **tau** that goes **linearly from 0 to 1**, and passes it to the model via a callback each epoch. The model is responsible for mapping tau to whatever parameters it needs (temperature, aux_loss_weight, etc.).
+
+### How It Works
+
+1. **`AnnealingManager`** computes `tau = min(epoch / anneal_epochs, 1.0)` at the start of each epoch.
+2. **`Trainer`** calls `model.on_annealing_step(tau)` before the training loop for that epoch.
+3. **`model.on_annealing_step(tau)`** updates internal parameters based on tau.
+
+> Once the annealing window ends (epoch ≥ anneal_epochs), tau stays at 1.0 and parameters remain at their final values.
+
+### Enabling Annealing
+
+**Via CLI:**
+```bash
+# Anneal over the full training duration
+python train.py --annealing
+
+# Anneal over the first N epochs only
+python train.py --annealing 20
+```
+
+**Via YAML:**
+```yaml
+annealing:
+  epochs: 20     # optional, defaults to total epochs
+```
+
+### Implementing in a Model
+
+Override two things on your model:
+
+```python
+from src.models.base import BaseModel
+
+class MyAnnealedModel(BaseModel):
+    @property
+    def need_annealing(self) -> bool:
+        return True
+
+    def on_annealing_step(self, tau: float) -> None:
+        """Called every epoch with tau linearly from 0 to 1."""
+        # Example: anneal temperature from 4.0 → 1.0
+        self.temperature = 1.0 + 3.0 * (1.0 - tau)
+        # Example: anneal auxiliary loss weight from 0 → 0.1
+        self.aux_loss_weight = tau * 0.1
+
+    def forward(self, x):
+        return self.classifier(x) / self.temperature
+```
+
+The base class provides default no-op implementations, so existing models are unaffected.
 
 ## Adding New Components
 
@@ -315,6 +411,15 @@ class MyModel(BaseModel):
     def __init__(self, num_classes=10, input_channels=1, **kwargs):
         super().__init__(num_classes, input_channels)
         # Define your model architecture
+
+    @property
+    def need_annealing(self) -> bool:
+        """Return True if this model uses parameter annealing."""
+        return False  # Set to True and override on_annealing_step to use annealing
+
+    def on_annealing_step(self, tau: float) -> None:
+        """Called each epoch with tau 0→1 when annealing is enabled."""
+        pass
         
     def forward(self, x):
         # Define forward pass

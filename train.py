@@ -7,6 +7,9 @@ Supports multiple datasets and model architectures
 import os
 os.environ['NO_ALBUMENTATIONS_UPDATE'] = '1'  # Disable albumentations update check
 
+import random
+
+import numpy as np
 import torch
 import torch.optim as optim
 from torchinfo import summary
@@ -14,7 +17,7 @@ from torchinfo import summary
 import yaml
 from src.datasets import DatasetRegistry
 from src.models import ModelRegistry
-from src.training import Trainer, CheckpointManager, ExperimentManager
+from src.training import Trainer, CheckpointManager, ExperimentManager, AnnealingManager
 from src.config import create_config_parser, load_config
 from src.utils import get_device, get_optimal_workers, setup_logger
 
@@ -266,16 +269,40 @@ def main():
     logger = setup_logger()
     logger.info("Starting training")
 
+    # Set random seed for reproducibility
+    seed = getattr(args, "seed", None)
+    if seed is not None:
+        logger.info(f"Setting random seed: {seed}")
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+
+    # Enable deterministic algorithms if requested
+    if getattr(args, "deterministic", False):
+        logger.info("Enabling deterministic algorithms (may reduce performance)")
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True)
+
     # Get device
     device, using_cpu = get_device()
     logger.info(f"Using device: {device}")
 
     if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True
+        deterministic = getattr(args, "deterministic", False)
+        if not deterministic:
+            torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.set_float32_matmul_precision("high")
-        logger.info("Enabled CUDA throughput optimizations (cuDNN benchmark + TF32)")
+
+        if deterministic:
+            logger.info("CUDA deterministic mode enabled (benchmark disabled for reproducibility)")
+        else:
+            logger.info("Enabled CUDA throughput optimizations (cuDNN benchmark + TF32)")
 
     # Get optimal workers
     optimal_train_workers, optimal_val_workers = get_optimal_workers(using_cpu)
@@ -382,6 +409,15 @@ def main():
 
     model = ModelRegistry.create(config.model["name"], **model_kwargs).to(device)
 
+    # Apply torch.compile if requested (requires PyTorch 2.x+)
+    if getattr(args, "compile", False):
+        logger.info("Applying torch.compile to model (mode=default)")
+        try:
+            model = torch.compile(model)
+            logger.info("torch.compile applied successfully")
+        except Exception as e:
+            logger.warning(f"torch.compile failed, falling back to eager mode: {e}")
+
     # Export class mappings to experiment directory
     try:
         dataset.export_index_label_json(
@@ -457,15 +493,58 @@ def main():
     logger.info(f"Using criterion: {criterion.__class__.__name__}")
 
     optimizer = create_optimizer(model, config)
+
+    # Build optimization summary
+    optimizer_name = config.optimization.get("optimizer", "adamw")
+    lr = config.optimization.get("learning_rate", 1e-3)
+    wd = config.optimization.get("weight_decay", 0.01)
+    scheduler_name = config.optimization.get("scheduler", "none")
+
+    opt_parts = [f"{optimizer_name}", f"lr={lr}", f"weight_decay={wd}"]
+    if optimizer_name == "sgd":
+        momentum = config.optimization.get("momentum", 0.9)
+        opt_parts.append(f"momentum={momentum}")
+    if hasattr(optimizer, "param_groups") and len(optimizer.param_groups) > 1:
+        pg_info = []
+        for i, pg in enumerate(optimizer.param_groups):
+            tag = "muon" if pg.get("use_muon") else "adam"
+            pg_lr = pg.get("lr", lr)
+            pg_wd = pg.get("weight_decay", wd)
+            pg_info.append(f"  pg{i}({tag}): lr={pg_lr}, wd={pg_wd}")
+        opt_parts.append(f"\n" + "\n".join(pg_info))
+    elif len(optimizer.param_groups) == 1 and getattr(optimizer.param_groups[0], "get", lambda: None)("use_muon", False):
+        opt_parts.append(f"muon_momentum={optimizer.param_groups[0].get('momentum', 'N/A')}")
+
     scheduler = create_scheduler(optimizer, config)
-
+    scheduler_desc = ""
     if scheduler:
-        logger.info(f"Using scheduler: {config.optimization.get('scheduler', 'none')}")
+        sch_detail = [scheduler_name]
+        if scheduler_name == "step":
+            sch_detail.append(f"step_size={config.optimization.get('scheduler_step_size', 10)}")
+            sch_detail.append(f"gamma={config.optimization.get('scheduler_gamma', 0.1)}")
+        elif scheduler_name == "cosine":
+            sch_detail.append(f"T_max={config.optimization.get('scheduler_t_max', 100)}")
+            sch_detail.append(f"eta_min={config.optimization.get('scheduler_eta_min', 1e-6)}")
+        elif scheduler_name == "plateau":
+            sch_detail.append(f"patience={config.optimization.get('scheduler_patience', 5)}")
+            sch_detail.append(f"factor={config.optimization.get('scheduler_factor', 0.1)}")
+        elif scheduler_name == "exponential":
+            sch_detail.append(f"gamma={config.optimization.get('scheduler_gamma', 0.95)}")
+        scheduler_desc = f", scheduler={sch_detail[0]}({', '.join(sch_detail[1:])})"
 
-    if args.mixed_precision and device.type == "cuda":
-        logger.info("Mixed precision training enabled (FP16)")
-    elif args.mixed_precision and device.type != "cuda":
-        logger.warning("Mixed precision requested but not available on CPU, using FP32")
+    amp_desc = ""
+    if args.mixed_precision:
+        if device.type == "cuda":
+            amp_desc = ", mixed_precision=FP16"
+        else:
+            logger.warning("Mixed precision requested but not available on CPU, using FP32")
+
+    logger.info(f"Optimizer: {', '.join(opt_parts)}{scheduler_desc}{amp_desc}")
+
+    # Set up parameter annealing
+    annealing_manager = AnnealingManager.from_config(config.annealing)
+    if annealing_manager is not None:
+        logger.info(f"Annealing enabled over {annealing_manager.epochs or 'all'} epochs")
 
     # Create trainer first
     trainer = Trainer(
@@ -477,6 +556,7 @@ def main():
         device=device,
         experiment_manager=experiment_manager,
         checkpoint_manager=checkpoint_manager,
+        annealing_manager=annealing_manager,
         dataset=dataset,
         patience=args.patience,
         scheduler=scheduler,
@@ -565,7 +645,6 @@ def main():
     # Start training
     if args.patience > 0:
         logger.info(f"Early stopping enabled with patience={args.patience}")
-    logger.info(f"Starting training for {config.training['epochs']} epochs")
 
     try:
         results = trainer.train(

@@ -35,6 +35,7 @@ class Trainer:
         dataset: Optional[BaseDataset] = None,
         patience: int = 0,
         use_amp: bool = False,
+        annealing_manager: Optional[Any] = None,
     ):
         self.model = model
         self.train_loader = train_loader
@@ -50,6 +51,7 @@ class Trainer:
         self.use_amp = use_amp and device.type == "cuda"
         self.scaler = GradScaler("cuda", enabled=self.use_amp)
         self.non_blocking = device.type == "cuda"
+        self.annealing_manager = annealing_manager
 
         # Detect training paradigm based on model and dataset types
         self.paradigm = self._detect_paradigm()
@@ -59,7 +61,9 @@ class Trainer:
         self.moe_num_experts = getattr(model, "moe_num_routed", 8)
 
         # Initialize metrics trackers using model's method
-        model_class = model.__class__
+        # Use _orig_mod if model is torch.compiled to get the original class
+        orig_model = getattr(model, "_orig_mod", model)
+        model_class = orig_model.__class__
         self.train_metrics = model_class.get_metrics_tracker(
             **getattr(criterion, "__dict__", {})
         )
@@ -536,6 +540,12 @@ class Trainer:
             last_epoch_trained = epoch
             epoch_start_time = time.time()
             current_lr = self._get_current_lr()
+
+            # Apply model parameter annealing before each epoch
+            if self.annealing_manager is not None:
+                tau = self.annealing_manager.get_tau(epoch, epochs)
+                if getattr(self.model, "need_annealing", False):
+                    self.model.on_annealing_step(tau)
 
             # Train
             train_metrics, train_speed = self.train_epoch(epoch)
