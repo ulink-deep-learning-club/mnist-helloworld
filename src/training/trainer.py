@@ -37,10 +37,10 @@ class Trainer:
         use_amp: bool = False,
         annealing_manager: Optional[Any] = None,
     ):
-        self.model = model
+        self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
-        self.criterion = criterion
+        self.criterion = criterion.to(device)
         self.optimizer = optimizer
         self.device = device
         self.experiment_manager = experiment_manager
