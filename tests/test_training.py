@@ -146,7 +146,7 @@ class TestExperimentManager:
     def test_experiment_properties(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             em = ExperimentManager(base_dir=tmpdir)
-            assert em.log_file.endswith("training_log.txt")
+            assert em.log_file.endswith("training_log.csv")
             assert em.plot_file.endswith("training_curves.png")
             assert em.config_file.endswith("config.yaml")
 

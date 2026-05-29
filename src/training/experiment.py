@@ -75,8 +75,13 @@ class ExperimentManager:
 
     @property
     def log_file(self) -> str:
-        """Get training log file path."""
-        return os.path.join(self.experiment_dir, "training_log.txt")
+        """Get training metrics log (CSV) path."""
+        return os.path.join(self.experiment_dir, "training_log.csv")
+
+    @property
+    def runtime_log(self) -> str:
+        """Get runtime log (Python logging output) path."""
+        return os.path.join(self.experiment_dir, "run.log")
 
     @property
     def plot_file(self) -> str:

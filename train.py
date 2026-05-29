@@ -329,6 +329,8 @@ def main():
     experiment_manager = ExperimentManager(
         base_dir="runs", resume_exp=args.resume, fork_exp=args.fork
     )
+    # Start writing full-format logs to experiment directory
+    setup_logger(log_file=experiment_manager.runtime_log)
     logger.info(experiment_manager.get_experiment_info())
 
     # Check if resuming or forking
