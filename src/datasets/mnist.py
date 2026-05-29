@@ -84,6 +84,18 @@ class MNISTDataset(ClassificationDataset):
             root=self.root, train=True, download=False, transform=self._train_transform
         )
 
+    def get_index_label_mapping(self) -> dict:
+        """Get mapping from class index to digit label."""
+        if self._train_dataset is None:
+            self.load_data()
+        assert self._train_dataset is not None
+        # Use the underlying dataset (MNIST stores class_to_idx directly)
+        ds = self._train_dataset
+        if hasattr(ds, "class_to_idx"):
+            return {v: k for k, v in ds.class_to_idx.items()}
+        # Fallback: standard MNIST digit labels
+        return {i: str(i) for i in range(10)}
+
     @property
     def num_classes(self) -> int:
         return 10

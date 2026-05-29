@@ -221,6 +221,72 @@ checkpointing:
   save_frequency: 10
 ```
 
+### Configuration Loading Mechanism
+
+The configuration system merges settings from **four sources** with the following priority (highest wins):
+
+| Priority | Source | Example |
+|----------|--------|--------|
+| 1 (lowest) | Hardcoded defaults in `get_default_config()` | `learning_rate: 1e-3` |
+| 2 | Default `config.yaml` at project root | Auto-loaded if present |
+| 3 | User-specified `--config` file | `--config myconfig.yaml` |
+| 4 (highest) | Explicit CLI arguments | `--epochs 50 --learning-rate 1e-4` |
+
+```
+            ┌─────────────────────┐
+            │  Hardcoded defaults │  (lowest priority)
+            └─────────┬───────────┘
+                      │
+            ┌─────────▼───────────┐
+            │    config.yaml      │  (project root)
+            └─────────┬───────────┘
+                      │
+            ┌─────────▼───────────┐
+            │  --config file      │  (user-specified)
+            └─────────┬───────────┘
+                      │
+            ┌─────────▼───────────┐
+            │  CLI args           │  (highest priority)
+            └─────────┬───────────┘
+                      │
+            ┌─────────▼───────────┐
+            │    Final Config     │
+            └─────────────────────┘
+```
+
+#### How Merging Works
+
+- Each tier is **deep-merged** on top of the previous one.
+- **Scalar values** (strings, numbers, lists) from the higher-priority source completely replace those from lower-priority sources.
+- **Dictionaries** are merged recursively, so you can override a single field without replacing the entire section.
+- CLI arguments that the user did **not** explicitly specify (i.e., they are at their default values) are **not** included in the override, preserving YAML values.
+
+#### Examples
+
+```bash
+# Only hardcoded defaults + default config.yaml
+python train.py --model lenet
+
+# User YAML overrides default config.yaml
+python train.py --model lenet --config myconfig.yaml
+
+# CLI overrides everything
+python train.py --model lenet --config myconfig.yaml --epochs 50 --learning-rate 1e-4
+```
+
+#### Type Safety
+
+After all merging, known numeric fields (e.g., `learning_rate`, `weight_decay`, `momentum`, `epochs`, `batch_size`, `adam_betas`) are automatically coerced to the correct Python types (`float` / `int` / `list`). This ensures that even if a YAML file contains quoted string values like `"1e-3"`, they are converted to proper floats before reaching the training code.
+
+#### The `--device` flag
+
+| Value | Behavior |
+|-------|----------|
+| `auto` (default) | Auto-detect: CUDA > MPS > CPU |
+| `cuda` | Force CUDA (raises error if unavailable) |
+| `mps` | Force Apple MPS (raises error if unavailable) |
+| `cpu` | Force CPU |
+
 ### Training Options
 
 #### Dataset & Model
@@ -234,7 +300,7 @@ checkpointing:
 #### Device & Training
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--device` | Device (cuda/cpu/mps) | `cuda` |
+| `--device` | Device (auto/cuda/cpu/mps) | `auto` |
 | `--epochs` | Number of epochs | `20` |
 | `--batch-size` | Batch size | `64` |
 | `--num-workers` | Data loading workers | `4` |

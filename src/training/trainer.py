@@ -52,6 +52,7 @@ class Trainer:
         self.scaler = GradScaler("cuda", enabled=self.use_amp)
         self.non_blocking = device.type == "cuda"
         self.annealing_manager = annealing_manager
+        self._annealing_mismatch_warned = False
 
         # Detect training paradigm based on model and dataset types
         self.paradigm = self._detect_paradigm()
@@ -546,6 +547,13 @@ class Trainer:
                 tau = self.annealing_manager.get_tau(epoch, epochs)
                 if getattr(self.model, "need_annealing", False):
                     self.model.on_annealing_step(tau)
+                elif not self._annealing_mismatch_warned:
+                    self._annealing_mismatch_warned = True
+                    logger.warning(
+                        "Annealing is enabled but model '%s' does not support it "
+                        "(need_annealing=False). on_annealing_step() will not be called.",
+                        self.model.__class__.__name__
+                    )
 
             # Train
             train_metrics, train_speed = self.train_epoch(epoch)

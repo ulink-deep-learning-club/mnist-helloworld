@@ -81,6 +81,22 @@ class CIFARDataset(ClassificationDataset):
             root=self.root, train=True, download=False, transform=self._train_transform
         )
 
+    def get_index_label_mapping(self) -> dict:
+        """Get mapping from class index to CIFAR-10 label name."""
+        # CIFAR-10 has 10 well-known classes
+        cifar10_classes = [
+            "airplane", "automobile", "bird", "cat", "deer",
+            "dog", "frog", "horse", "ship", "truck",
+        ]
+        if self._train_dataset is None:
+            self.load_data()
+        assert self._train_dataset is not None
+        ds = self._train_dataset
+        if hasattr(ds, "class_to_idx"):
+            return {v: k for k, v in ds.class_to_idx.items()}
+        # Fallback: use known CIFAR-10 class names
+        return {i: cifar10_classes[i] for i in range(10)}
+
     @property
     def num_classes(self) -> int:
         return 10

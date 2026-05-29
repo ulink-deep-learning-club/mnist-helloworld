@@ -288,7 +288,7 @@ def main():
         torch.use_deterministic_algorithms(True)
 
     # Get device
-    device, using_cpu = get_device()
+    device, using_cpu = get_device(device_name=args.device)
     logger.info(f"Using device: {device}")
 
     if device.type == "cuda":

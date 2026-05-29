@@ -33,12 +33,29 @@ class AnnealingManager:
 
             annealing:
               epochs: 20     # optional, default = total epochs
+
+        Returns ``None`` when annealing is not configured (``cfg`` is
+        ``None``).  An empty dict ``{}`` or ``True`` means "anneal over
+        all epochs" (``epochs=None``).
         """
-        if not cfg:
+        if cfg is None:
             return None
-        epochs: Optional[int] = None
+        if isinstance(cfg, bool):
+            # --annealing (no value) → const=-1 → from_args: {} → bool({}) is False
+            # But we already handled None above, so this catches other truthy cases.
+            return cls(epochs=None) if cfg else None
         if isinstance(cfg, dict):
             epochs = cfg.get("epochs", None)
-        elif isinstance(cfg, (int, float)):
+            if epochs is not None and epochs <= 0:
+                raise ValueError(
+                    f"annealing.epochs must be > 0, got {epochs}"
+                )
+            return cls(epochs=epochs)
+        if isinstance(cfg, (int, float)):
             epochs = int(cfg)
-        return cls(epochs=epochs)
+            if epochs <= 0:
+                raise ValueError(
+                    f"Annealing epochs must be > 0, got {epochs}"
+                )
+            return cls(epochs=epochs)
+        raise TypeError(f"Unexpected annealing config type: {type(cfg).__name__}")

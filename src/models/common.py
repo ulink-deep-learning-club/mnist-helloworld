@@ -302,9 +302,13 @@ class InvertedResidual(nn.Module):
 def drop_path(
     x: torch.Tensor, drop_prob: float = 1.0, inplace: bool = False
 ) -> torch.Tensor:
+    if drop_prob <= 0:
+        return x
+    if drop_prob >= 1:
+        return torch.zeros_like(x)
     mask_shape = (x.shape[0],) + (1,) * (x.ndim - 1)
-    mask: torch.Tensor = x.new_empty(mask_shape).bernoulli_(1-drop_prob)
-    mask.div_(1-drop_prob)
+    mask: torch.Tensor = x.new_empty(mask_shape).bernoulli_(1 - drop_prob)
+    mask.div_(1 - drop_prob)
     if inplace:
         x.mul_(mask)
     else:

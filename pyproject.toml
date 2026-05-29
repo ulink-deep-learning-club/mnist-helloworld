@@ -17,6 +17,7 @@ dependencies = [
     "qdrant-client>=1.16.2",
     "httpx[socks]>=0.28.1",
     "muon-optimizer",
+    "opencv-python>=4.13.0.92",
 ]
 
 [tool.uv.sources]
@@ -36,5 +37,6 @@ explicit = true
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
+    "pytest-cov>=7.1.0",
     "ruff>=0.15.14",
 ]

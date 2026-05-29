@@ -1,4 +1,6 @@
+import os
 import argparse
+from copy import deepcopy
 from typing import Dict, Any, Optional, List
 
 try:
@@ -7,6 +9,19 @@ try:
     YAML_AVAILABLE = True
 except ImportError:
     YAML_AVAILABLE = False
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep merge override into base, returning a new dict.
+    Values in override take precedence over values in base.
+    """
+    result = deepcopy(base)
+    for key, val in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(val, dict):
+            result[key] = _deep_merge(result[key], val)
+        else:
+            result[key] = deepcopy(val)
+    return result
 
 
 def get_available_datasets() -> List[str]:
@@ -48,18 +63,12 @@ class Config:
         self.training = config_dict.get("training", {})
         self.optimization = config_dict.get("optimization", {})
         self.checkpointing = config_dict.get("checkpointing", {})
-        self.annealing = config_dict.get("annealing", [])
+        self.annealing = config_dict.get("annealing")  # None → not enabled, {} → enabled over all epochs
 
     @classmethod
     def from_yaml(cls, yaml_path: str) -> "Config":
         """Load configuration from YAML file."""
-        if not YAML_AVAILABLE:
-            raise ImportError(
-                "PyYAML is required for YAML configuration files. Install with: pip install pyyaml"
-            )
-
-        with open(yaml_path, "r") as f:
-            config_dict = yaml.safe_load(f)
+        config_dict = _load_yaml_file(yaml_path)
         return cls(config_dict)
 
     @classmethod
@@ -77,12 +86,13 @@ class Config:
                 "epochs": args.epochs,
                 "batch_size": args.batch_size,
                 "num_workers": args.num_workers,
+                "shuffle_train": True,
             },
             "optimization": {
                 "learning_rate": args.learning_rate,
                 "optimizer": args.optimizer,
-                "weight_decay": 0.01,
-                "momentum": 0.9,
+                "weight_decay": args.weight_decay,
+                "momentum": args.momentum,
                 "scheduler": args.scheduler,
                 "scheduler_step_size": args.scheduler_step_size,
                 "scheduler_gamma": args.scheduler_gamma,
@@ -117,8 +127,8 @@ class Config:
         return self._config.get(key, default)
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary."""
-        return self._config.copy()
+        """Convert to dictionary (deep copy, safe to mutate)."""
+        return deepcopy(self._config)
 
 
 def get_default_config() -> Dict[str, Any]:
@@ -148,6 +158,8 @@ def get_default_config() -> Dict[str, Any]:
             "scheduler_eta_min": 1e-6,
             "scheduler_patience": 5,
             "scheduler_factor": 0.1,
+            "momentum": 0.9,
+            "triplet_margin": 1.0,
             "muon_momentum": 0.95,
             "muon_ns_steps": 5,
             "adam_lr": 3e-4,
@@ -188,15 +200,15 @@ def create_config_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        choices=["cuda", "cpu", "mps"],
-        help="Device to use for training",
+        default="auto",
+        choices=["auto", "cuda", "cpu", "mps"],
+        help="Device to use for training (auto, cuda, cpu, mps)",
     )
     parser.add_argument("--num-classes", type=int, default=10, help="Number of classes")
     parser.add_argument(
         "--input-size",
         type=int,
-        default=64,
+        default=28,
         help="Input image size (height and width, will be squared)",
     )
 
@@ -212,6 +224,12 @@ def create_config_parser() -> argparse.ArgumentParser:
         "--learning-rate", type=float, default=1e-3, help="Learning rate"
     )
     parser.add_argument(
+        "--weight-decay", type=float, default=0.01, help="Weight decay"
+    )
+    parser.add_argument(
+        "--momentum", type=float, default=0.9, help="Momentum (used by SGD optimizer)"
+    )
+    parser.add_argument(
         "--optimizer",
         type=str,
         default="adamw",
@@ -221,7 +239,7 @@ def create_config_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--muon-momentum",
         type=float,
-        default=0.9,
+        default=0.95,
         help="Muon momentum parameter (only used for muon optimizers)",
     )
     parser.add_argument(
@@ -399,13 +417,194 @@ def create_config_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_PARSER_DEFAULTS_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _get_parser_defaults() -> Dict[str, Any]:
+    """Get the default values from the argument parser (cached)."""
+    global _PARSER_DEFAULTS_CACHE
+    if _PARSER_DEFAULTS_CACHE is None:
+        parser = create_config_parser()
+        _PARSER_DEFAULTS_CACHE = vars(parser.parse_args([]))
+    return _PARSER_DEFAULTS_CACHE
+
+
+def _build_user_cli_dict(args: argparse.Namespace) -> Dict[str, Any]:
+    """Build a sparse config dict containing only the CLI args that the user
+    explicitly provided (i.e. differ from their default values).
+
+    This ensures YAML config values are preserved for anything the user
+    didn't explicitly specify on the command line.
+    """
+    defaults = _get_parser_defaults()
+    # Determine which args the user explicitly provided (differ from default)
+    explicit_args = {
+        k: v for k, v in vars(args).items()
+        if k not in defaults or v != defaults[k]
+    }
+
+    if not explicit_args:
+        return {}
+
+    # Build two full config dicts: one with defaults, one with user overrides
+    default_ns = argparse.Namespace(**defaults)
+    merged_ns = argparse.Namespace(**{**defaults, **explicit_args})
+
+    default_config = Config.from_args(default_ns)._config
+    merged_config = Config.from_args(merged_ns)._config
+
+    # Recursively extract only the fields that differ from defaults
+    def _diff_dict(base: dict, override: dict) -> dict:
+        result = {}
+        for key, val in override.items():
+            if key not in base:
+                result[key] = deepcopy(val)
+            elif isinstance(val, dict) and isinstance(base[key], dict):
+                nested = _diff_dict(base[key], val)
+                if nested:
+                    result[key] = nested
+            elif val != base[key]:
+                result[key] = deepcopy(val)
+        return result
+
+    return _diff_dict(default_config, merged_config)
+
+
+def _load_yaml_file(path: str) -> dict:
+    """Load a YAML file and return its contents as a dict."""
+    if not YAML_AVAILABLE:
+        raise ImportError(
+            "PyYAML is required for YAML configuration files. Install with: pip install pyyaml"
+        )
+    with open(path, "r") as f:
+        return yaml.safe_load(f)
+
+
+# Schema describing which config fields should be numeric and their target types.
+# After merging YAML config, any string values in these paths are coerced.
+_NUMERIC_SCHEMA: Dict[str, type | tuple[type, ...]] = {
+    # training section
+    "training.epochs": int,
+    "training.batch_size": int,
+    "training.num_workers": int,
+    # optimization section
+    "optimization.learning_rate": (float, int),
+    "optimization.weight_decay": (float, int),
+    "optimization.momentum": (float, int),
+    "optimization.scheduler_step_size": int,
+    "optimization.scheduler_gamma": (float, int),
+    "optimization.scheduler_t_max": int,
+    "optimization.scheduler_eta_min": (float, int),
+    "optimization.scheduler_patience": int,
+    "optimization.scheduler_factor": (float, int),
+    "optimization.triplet_margin": (float, int),
+    "optimization.muon_momentum": (float, int),
+    "optimization.muon_ns_steps": int,
+    "optimization.adam_lr": (float, int),
+    "optimization.adam_betas": list,
+    # checkpointing section
+    "checkpointing.save_frequency": int,
+    # model section
+    "model.num_classes": int,
+    "model.input_size": list,
+}
+
+
+def _coerce_numeric_types(d: dict) -> dict:
+    """Convert string values in known numeric fields to the correct type.
+    This is a safety net for YAML parsing quirks (e.g., "1e-3" parsed as string).
+    """
+    result = deepcopy(d)
+    for dotted_path, target_type in _NUMERIC_SCHEMA.items():
+        parts = dotted_path.split(".")
+        parent = result
+        for part in parts[:-1]:
+            if part not in parent or not isinstance(parent[part], dict):
+                parent = None
+                break
+            parent = parent[part]
+        if parent is None:
+            continue
+        key = parts[-1]
+        if key not in parent:
+            continue
+        val = parent[key]
+
+        # --- List-type fields (adam_betas, input_size) ---
+        if target_type is list:
+            if isinstance(val, list):
+                # Convert any string elements to float
+                converted = [
+                    float(item) if isinstance(item, str) else item
+                    for item in val
+                ]
+                if converted != val:
+                    parent[key] = converted
+            # If val is not a list at all, leave it alone
+            continue
+
+        # Already the right type — skip
+        if isinstance(val, target_type):
+            continue
+
+        # String that should be numeric — convert
+        if isinstance(val, str):
+            try:
+                if target_type in (float, (float, int)):
+                    parent[key] = float(val)
+                elif target_type is int:
+                    parent[key] = int(val)
+            except (ValueError, TypeError):
+                pass  # leave as-is, will fail downstream
+    return result
+
+
 def load_config(
     config_path: Optional[str] = None, args: Optional[argparse.Namespace] = None
 ) -> Config:
-    """Load configuration from file or arguments."""
+    """Load configuration with the following priority (highest wins):
+
+    1. Hardcoded defaults (lowest priority)
+    2. Default config.yaml at project root
+    3. User-specified --config file
+    4. Explicit CLI arguments (highest priority)
+
+    Examples::
+
+        python train.py                                    # defaults + config.yaml       # noqa
+        python train.py --config myconfig.yaml              # defaults + config.yaml + myconfig.yaml  # noqa
+        python train.py --epochs 50                         # defaults + config.yaml + CLI override  # noqa
+        python train.py --config myconfig.yaml --epochs 50  # ... + myconfig.yaml + CLI override  # noqa
+    """
+    # Tier 1: hardcoded defaults
+    config_dict = get_default_config()
+
+    # Tier 2: default config.yaml at project root (if exists)
+    default_yaml_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.yaml")
+    if os.path.exists(default_yaml_path):
+        try:
+            yaml_dict = _load_yaml_file(default_yaml_path)
+            if yaml_dict:
+                config_dict = _deep_merge(config_dict, yaml_dict)
+        except Exception as e:
+            # Warn but don't crash if default config.yaml is malformed
+            import warnings
+            warnings.warn(f"Failed to load default config.yaml: {e}")
+
+    # Tier 3: user-specified --config file (if provided)
     if config_path:
-        return Config.from_yaml(config_path)
-    elif args:
-        return Config.from_args(args)
-    else:
-        return Config(get_default_config())
+        yaml_dict = _load_yaml_file(config_path)
+        if yaml_dict:
+            config_dict = _deep_merge(config_dict, yaml_dict)
+
+    # Tier 4: CLI arguments (only non-default values override)
+    if args:
+        cli_overrides = _build_user_cli_dict(args)
+        if cli_overrides:
+            config_dict = _deep_merge(config_dict, cli_overrides)
+
+    # Safety: coerce known numeric fields to correct types
+    # (handles edge cases where YAML parses "1e-3" as a string)
+    config_dict = _coerce_numeric_types(config_dict)
+
+    return Config(config_dict)
