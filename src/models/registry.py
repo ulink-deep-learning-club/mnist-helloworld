@@ -27,6 +27,8 @@ from .fpn_moe_vit import (
 )
 from .siamese import SiameseNetwork
 from .alexnet import AlexNet
+from .tinynet import TinyNet
+from .tinynetv2 import TinyNetV2
 
 
 class ModelRegistry:
@@ -79,3 +81,5 @@ ModelRegistry.register("siamese_fpn_moe_vit_tiny", SiameseFPNMoEViTTiny)
 ModelRegistry.register("siamese_fpn_moe_vit_small", SiameseFPNMoEViTSmall)
 ModelRegistry.register("siamese_fpn_moe_vit_large", SiameseFPNMoEViTLarge)
 ModelRegistry.register("alexnet", AlexNet)
+ModelRegistry.register("tinynet", TinyNet)
+ModelRegistry.register("tinynetv2", TinyNetV2)

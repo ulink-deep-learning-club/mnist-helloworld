@@ -36,6 +36,8 @@ from .fpn_moe_vit import (
     SiameseFPNMoEViTLarge,
 )
 from .siamese import SiameseNetwork
+from .tinynet import TinyNet
+from .tinynetv2 import TinyNetV2
 from .registry import ModelRegistry
 
 __all__ = [
@@ -71,5 +73,7 @@ __all__ = [
     "SiameseFPNMoEViTSmall",
     "SiameseFPNMoEViTLarge",
     "SiameseNetwork",
+    "TinyNet",
+    "TinyNetV2",
     "ModelRegistry",
 ]
