@@ -18,6 +18,7 @@ dependencies = [
     "httpx[socks]>=0.28.1",
     "muon-optimizer",
     "opencv-python>=4.13.0.92",
+    "onnx>=1.22.0",
 ]
 
 [tool.uv.sources]
