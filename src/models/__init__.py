@@ -38,6 +38,19 @@ from .fpn_moe_vit import (
 from .siamese import SiameseNetwork
 from .tinynet import TinyNet
 from .tinynetv2 import TinyNetV2
+from .lenet_act import (
+    LeNetActSigmoid,
+    LeNetActTanh,
+    LeNetActArctan,
+    LeNetActReLU,
+    LeNetActLeakyReLU,
+    LeNetActSiLU,
+    LeNetActCaLU,
+    LeNetActLeakyCaLU,
+    LeNetActRoCLU,
+    LeNetActGELU,
+    LeNetActSoftLeakyReLU,
+)
 from .registry import ModelRegistry
 
 __all__ = [
@@ -75,5 +88,16 @@ __all__ = [
     "SiameseNetwork",
     "TinyNet",
     "TinyNetV2",
+    "LeNetActSigmoid",
+    "LeNetActTanh",
+    "LeNetActArctan",
+    "LeNetActReLU",
+    "LeNetActLeakyReLU",
+    "LeNetActSiLU",
+    "LeNetActCaLU",
+    "LeNetActLeakyCaLU",
+    "LeNetActRoCLU",
+    "LeNetActGELU",
+    "LeNetActSoftLeakyReLU",
     "ModelRegistry",
 ]

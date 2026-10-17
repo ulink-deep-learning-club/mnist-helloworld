@@ -29,6 +29,19 @@ from .siamese import SiameseNetwork
 from .alexnet import AlexNet
 from .tinynet import TinyNet
 from .tinynetv2 import TinyNetV2
+from .lenet_act import (
+    LeNetActSigmoid,
+    LeNetActTanh,
+    LeNetActArctan,
+    LeNetActReLU,
+    LeNetActLeakyReLU,
+    LeNetActSiLU,
+    LeNetActCaLU,
+    LeNetActLeakyCaLU,
+    LeNetActRoCLU,
+    LeNetActGELU,
+    LeNetActSoftLeakyReLU,
+)
 
 
 class ModelRegistry:
@@ -83,3 +96,14 @@ ModelRegistry.register("siamese_fpn_moe_vit_large", SiameseFPNMoEViTLarge)
 ModelRegistry.register("alexnet", AlexNet)
 ModelRegistry.register("tinynet", TinyNet)
 ModelRegistry.register("tinynetv2", TinyNetV2)
+ModelRegistry.register("lenet_act_sigmoid", LeNetActSigmoid)
+ModelRegistry.register("lenet_act_tanh", LeNetActTanh)
+ModelRegistry.register("lenet_act_arctan", LeNetActArctan)
+ModelRegistry.register("lenet_act_relu", LeNetActReLU)
+ModelRegistry.register("lenet_act_lrelu", LeNetActLeakyReLU)
+ModelRegistry.register("lenet_act_silu", LeNetActSiLU)
+ModelRegistry.register("lenet_act_calu", LeNetActCaLU)
+ModelRegistry.register("lenet_act_leakycau", LeNetActLeakyCaLU)
+ModelRegistry.register("lenet_act_roclu", LeNetActRoCLU)
+ModelRegistry.register("lenet_act_gelu", LeNetActGELU)
+ModelRegistry.register("lenet_act_softlrelu", LeNetActSoftLeakyReLU)
